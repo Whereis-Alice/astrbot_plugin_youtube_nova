@@ -10,7 +10,11 @@ from .constants import Config
 from .downloader.utils import check_cache_dir_available
 from .logger import logger
 from .parser.platform import YouTubeParser
-from .parser.runtime_manager.youtube import normalize_cookie_input
+from .parser.runtime_manager.youtube import (
+    SUPPORTED_BROWSERS,
+    SUPPORTED_KEYRINGS,
+    normalize_cookie_input,
+)
 from .translation.provider_defs import (
     LLM_PROVIDER_DEFAULTS,
     LLM_PROVIDER_OPTIONS,
@@ -460,7 +464,16 @@ class ProxyConfig:
 
 @dataclass
 class YouTubeConfig:
+    cookie_source: str = "manual"
     cookie: str = ""
+    browser_name: str = "chromium"
+    browser_profile: str = ""
+    browser_keyring: str = ""
+    browser_refresh_seconds: int = 60
+    browser_executable: str = ""
+    browser_display: str = ""
+    browser_wakeup_mode: str = "off"
+    browser_wakeup_timeout_seconds: int = 30
     max_height: int = 1080
     player_clients: str = "ios,android_vr"
     total_budget_seconds: int = 45
@@ -1011,12 +1024,51 @@ class ConfigManager:
             True,
             "youtube.cookie_auto_refresh",
         )
+        youtube_cookie_source = self._parse_cookie_source(
+            youtube_raw.get("cookie_source", "")
+        )
         # 用户可能直接粘 cookies.txt 或扩展导出的 JSON，统一成 Cookie 请求头。
-        youtube_cookie = normalize_cookie_input(
+        configured_youtube_cookie = normalize_cookie_input(
             str(youtube_raw.get("cookie", "") or "")
         )
+        youtube_cookie = (
+            configured_youtube_cookie
+            if youtube_cookie_source == "manual"
+            else ""
+        )
         self.youtube = YouTubeConfig(
+            cookie_source=youtube_cookie_source,
             cookie=youtube_cookie,
+            browser_name=self._parse_browser_name(
+                youtube_raw.get("browser_name", "chromium")
+            ),
+            browser_profile=str(
+                youtube_raw.get("browser_profile", "") or ""
+            ).strip(),
+            browser_keyring=self._parse_browser_keyring(
+                youtube_raw.get("browser_keyring", "")
+            ),
+            browser_refresh_seconds=self._parse_bounded_int(
+                youtube_raw.get("browser_refresh_seconds", 60),
+                60,
+                15,
+                3600,
+            ),
+            browser_executable=str(
+                youtube_raw.get("browser_executable", "") or ""
+            ).strip(),
+            browser_display=str(
+                youtube_raw.get("browser_display", "") or ""
+            ).strip(),
+            browser_wakeup_mode=self._parse_browser_wakeup_mode(
+                youtube_raw.get("browser_wakeup_mode", "")
+            ),
+            browser_wakeup_timeout_seconds=self._parse_bounded_int(
+                youtube_raw.get("browser_wakeup_timeout_seconds", 30),
+                30,
+                10,
+                120,
+            ),
             max_height=self._parse_youtube_max_height(
                 youtube_raw.get("max_height", "1080")
             ),
@@ -1185,6 +1237,24 @@ class ConfigManager:
                 ),
                 cookie_state_file=self.youtube.cookie_runtime_file,
                 cookie_auto_refresh=self.youtube.cookie_auto_refresh,
+                browser_cookie_name=(
+                    self.youtube.browser_name
+                    if self.youtube.cookie_source == "browser"
+                    else ""
+                ),
+                browser_cookie_profile=self.youtube.browser_profile,
+                browser_cookie_keyring=self.youtube.browser_keyring,
+                browser_cookie_refresh_seconds=(
+                    self.youtube.browser_refresh_seconds
+                ),
+                browser_cookie_executable=self.youtube.browser_executable,
+                browser_cookie_display=self.youtube.browser_display,
+                browser_cookie_wakeup_mode=(
+                    self.youtube.browser_wakeup_mode
+                ),
+                browser_cookie_wakeup_timeout_seconds=(
+                    self.youtube.browser_wakeup_timeout_seconds
+                ),
                 ytdlp_fallback=self.youtube.ytdlp_fallback,
                 ytdlp_js_runtime=self.youtube.ytdlp_js_runtime,
                 ytdlp_timeout=self.youtube.ytdlp_timeout,
@@ -1411,6 +1481,56 @@ class ConfigManager:
             return max(0, int(value))
         except (OverflowError, TypeError, ValueError):
             return max(0, int(default))
+
+    @staticmethod
+    def _parse_cookie_source(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        mapping = {
+            "": "manual",
+            "手动填写": "manual",
+            "manual": "manual",
+            "浏览器 profile": "browser",
+            "浏览器profile": "browser",
+            "browser": "browser",
+        }
+        return mapping.get(text, "manual")
+
+    @staticmethod
+    def _parse_browser_name(value: Any) -> str:
+        browser = str(value or "chromium").strip().lower()
+        if browser in SUPPORTED_BROWSERS:
+            return browser
+        logger.warning(
+            f"youtube.browser_name={browser!r} 不受支持，已回落 chromium"
+        )
+        return "chromium"
+
+    @staticmethod
+    def _parse_browser_keyring(value: Any) -> str:
+        keyring = str(value or "").strip().upper()
+        if keyring in {"", "AUTO", "自动"}:
+            return ""
+        if keyring in SUPPORTED_KEYRINGS:
+            return keyring
+        logger.warning(
+            f"youtube.browser_keyring={keyring!r} 不受支持，已改为自动探测"
+        )
+        return ""
+
+    @staticmethod
+    def _parse_browser_wakeup_mode(value: Any) -> str:
+        text = str(value or "").strip().lower()
+        mapping = {
+            "": "off",
+            "关闭": "off",
+            "off": "off",
+            "有头": "headed",
+            "有头（推荐）": "headed",
+            "headed": "headed",
+            "无头": "headless",
+            "headless": "headless",
+        }
+        return mapping.get(text, "off")
 
     @staticmethod
     def _parse_stream_source(value) -> str:

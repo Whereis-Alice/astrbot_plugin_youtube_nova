@@ -554,6 +554,9 @@ class YtDlpStreamResolver:
         pot_provider: str = "",
         fetch_pot: str = "auto",
         max_bytes: int = 0,
+        cookies_from_browser: Optional[
+            Tuple[str, Optional[str], Optional[str], Optional[str]]
+        ] = None,
     ):
         self.proxy = (proxy or "").strip() or None
         self.max_height = max(0, _as_int(max_height))
@@ -566,6 +569,9 @@ class YtDlpStreamResolver:
         self.pot_provider = (pot_provider or "").strip()
         mode = (fetch_pot or "auto").strip().lower()
         self.fetch_pot = mode if mode in _FETCH_POT_CHOICES else "auto"
+        self.cookies_from_browser = (
+            tuple(cookies_from_browser) if cookies_from_browser else None
+        )
         self._jar_path = ""
         # yt-dlp 一次解析会起子进程并跑 JS，串行化避免并发请求把 CPU 打满。
         self._gate = asyncio.Semaphore(1)
@@ -685,7 +691,11 @@ class YtDlpStreamResolver:
                 }
         return args
 
-    def build_options(self, jar_path: str = "") -> Dict[str, Any]:
+    def build_options(
+        self,
+        jar_path: str = "",
+        use_browser_cookies: bool = True,
+    ) -> Dict[str, Any]:
         """组装 yt-dlp 选项（只取元数据，不下载）。"""
         env = probe_ytdlp_environment(self.js_runtime)
         options: Dict[str, Any] = {
@@ -704,7 +714,12 @@ class YtDlpStreamResolver:
             # 关键：--js-runtimes 默认只有 deno，装了 node 也不会被启用，
             # 必须显式声明；旧版 yt-dlp 不认识这个键，会被安全忽略。
             options["js_runtimes"] = {env.runtime_name: {"path": None}}
-        if jar_path:
+        if self.cookies_from_browser and use_browser_cookies:
+            # Let yt-dlp preserve browser domains, paths and expiry metadata.
+            # This is deliberately exclusive with the generated manual jar so
+            # stale configured values can never overwrite the live profile.
+            options["cookiesfrombrowser"] = self.cookies_from_browser
+        elif jar_path:
             options["cookiefile"] = jar_path
         if self.proxy:
             options["proxy"] = self.proxy
@@ -760,6 +775,7 @@ class YtDlpStreamResolver:
         video_id: str,
         cookie_header: str = "",
         cookie_revision: int = 0,
+        use_browser_cookies: bool = True,
     ) -> Tuple[Optional[YtDlpStream], Dict[str, Any]]:
         """解析一条视频，同时把 yt-dlp 读到的原始 info 一并交回。
 
@@ -778,8 +794,15 @@ class YtDlpStreamResolver:
             self._warn_unready(env)
             return None, {}
         self._announce(env)
-        jar = self._ensure_cookie_jar(cookie_header, cookie_revision)
-        options = self.build_options(jar)
+        jar = (
+            ""
+            if self.cookies_from_browser and use_browser_cookies
+            else self._ensure_cookie_jar(cookie_header, cookie_revision)
+        )
+        options = self.build_options(
+            jar,
+            use_browser_cookies=use_browser_cookies,
+        )
         try:
             async with self._gate:
                 info = await asyncio.wait_for(
@@ -812,12 +835,14 @@ class YtDlpStreamResolver:
         video_id: str,
         cookie_header: str = "",
         cookie_revision: int = 0,
+        use_browser_cookies: bool = True,
     ) -> Optional[YtDlpStream]:
         """只要一路可直连流的薄封装；任何失败都返回 None。"""
         stream, _info = await self.resolve_full(
             video_id,
             cookie_header=cookie_header,
             cookie_revision=cookie_revision,
+            use_browser_cookies=use_browser_cookies,
         )
         return stream
 

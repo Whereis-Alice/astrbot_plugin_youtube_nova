@@ -44,7 +44,7 @@ from .youtube_core.translation import MetadataTranslator, build_card_metadata_li
     "astrbot_plugin_youtube_nova",
     "Whereis-Alice",
     "YouTube Nova - YouTube 视频、卡片、翻译与热评解析",
-    "1.0.0",
+    "1.1.0",
 )
 class YouTubeNovaPlugin(Star):
     # Google 侧的登录凭据大约每 10 分钟就会换一茬。轮换请求本身极轻（一个
@@ -102,6 +102,10 @@ class YouTubeNovaPlugin(Star):
             request_cooldown_minutes=(
                 cfg.youtube.cookie_alert_cooldown_minutes
             ),
+            browser_profile_mode=(
+                self.youtube_parser is not None
+                and self.youtube_parser.browser_cookie_source is not None
+            ),
         )
 
     async def initialize(self):
@@ -132,7 +136,8 @@ class YouTubeNovaPlugin(Star):
         self.logger.warning(
             "[youtube] Cookie 失效: "
             + YouTubeCookieNoticeManager.describe_reason(reason)
-            + "，请重新导出 YouTube Cookie"
+            + "，"
+            + self.youtube_parser.cookie_recovery_hint()
         )
         self.youtube_cookie_notice.trigger_assist_request(reason)
 
@@ -253,11 +258,11 @@ class YouTubeNovaPlugin(Star):
     # ── YouTube Cookie 维护 ─────────────────────────────
 
     def _youtube_keepalive_enabled(self) -> bool:
-        """只有配置了 Cookie 且体检间隔为正数时才需要后台维护任务。"""
+        """存在手动或浏览器凭据源且体检间隔为正数时启动维护任务。"""
         if self.youtube_parser is None:
             return False
         cfg = self.config_manager
-        if not cfg.youtube.cookie:
+        if not self.youtube_parser.cookie_maintenance_enabled:
             return False
         try:
             return int(cfg.youtube.cookie_keepalive_hours) > 0
@@ -301,7 +306,7 @@ class YouTubeNovaPlugin(Star):
             )
         summary = f"[youtube] Cookie 维护: {detail}；{parser.cookie_status_line()}"
         if logged_in is False:
-            self.logger.warning(summary + "；请重新导出 YouTube Cookie")
+            self.logger.warning(summary + "；" + parser.cookie_recovery_hint())
             self.youtube_cookie_notice.trigger_assist_request(
                 "keepalive_logged_out"
             )

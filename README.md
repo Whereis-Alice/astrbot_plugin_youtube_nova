@@ -11,7 +11,7 @@
 - DASH 音视频合并、画质与发送体积预算、超限自动压缩
 - 作者头像、播放量、点赞数、评论数与公开热评
 - YouTube、哔哩哔哩、X（推特）三套仿站皮肤及五套通用皮肤，支持深浅色和四种布局
-- Netscape / JSON / Cookie Header 三种 Cookie 输入，自动吸收服务端轮换
+- 浏览器 Profile 登录态与手动 Cookie 双模式，可自动唤醒浏览器续活
 - yt-dlp JS challenge 与可选 PO Token provider
 - 文本/卡片/富媒体输出控制、翻译、聚合、归档和频率限制
 
@@ -29,13 +29,13 @@ https://github.com/Whereis-Alice/astrbot_plugin_youtube_nova
 
 先将 Nova 流媒体解析升级到 `v1.16.0` 或更高版本，再安装本插件；旧版 Nova 仍内置 YouTube 解析，同时启用会重复响应。随后把旧配置中的 `youtube`、`proxy`、`download` 和需要的消息/卡片选项填入本插件。
 
-Cookie 属于登录凭据，不要上传到 GitHub、日志或聊天记录。旧插件缓存中的 Cookie 轮换状态不会自动跨插件复制；建议在新插件中重新填写原始导出内容，让它建立自己的运行时状态。
+Cookie 属于登录凭据，不要上传到 GitHub、日志或聊天记录。旧插件缓存中的 Cookie 轮换状态不会自动跨插件复制；有图形桌面的长期服务器建议改用浏览器 Profile 模式。
 
 ## 关键配置
 
 - “视频流取用来源”建议保持“自动”。机房 IP 连续触发门禁后会暂时直接交给 yt-dlp。
 - “可发送视频体积上限”默认 48 MiB，适配 LLOneBot/QQ Highway 的实测边界；其他适配器可自行提高。
-- Cookie 不是必填。需要登录态时使用专用小号，并保持浏览器与 Bot 的出口稳定。
+- Cookie 不是必填。有图形桌面的服务器优先选“浏览器 Profile”，插件可定期用有头浏览器访问 YouTube、同步最新登录态并自动关闭；无桌面环境再用手动 Cookie。
 - PO Token 只能增强部分媒体流请求，不能替代有效 Cookie 或改善高风险出口 IP。
 
 完整链路、Cookie 维护和 PO Token 配置见 [YouTube 说明](docs/youtube.md)。

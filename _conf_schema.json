@@ -736,10 +736,115 @@
         "hint": "整条解析链（元数据、媒体流、头像/点赞/热评）共享这一个预算，而不是每层各自超时，避免最坏情况叠加成分钟级。预算用尽时会跳过尚未完成的增强步骤，只发已拿到的信息。",
         "default": 45
       },
+      "cookie_source": {
+        "description": "登录凭据来源",
+        "type": "string",
+        "options": [
+          "手动填写",
+          "浏览器 Profile"
+        ],
+        "hint": "手动填写兼容原来的 Cookie 文本。浏览器 Profile 适合有图形桌面的长期服务器：Chromium 负责登录和轮换，插件按需读取最新状态，yt-dlp 也直接读取同一 Profile，不再维护两份会互相过期的 Cookie。浏览器模式必须由你明确选择，插件不会默认读取服务器上的浏览器凭据。",
+        "default": "手动填写"
+      },
+      "browser_name": {
+        "description": "浏览器类型",
+        "type": "string",
+        "options": [
+          "chromium",
+          "chrome",
+          "edge",
+          "brave",
+          "vivaldi",
+          "opera",
+          "whale",
+          "firefox"
+        ],
+        "condition": {
+          "cookie_source": "浏览器 Profile"
+        },
+        "hint": "必须与保存 YouTube 登录态的浏览器一致。服务器安装的是 Chromium 时保持默认。",
+        "default": "chromium"
+      },
+      "browser_profile": {
+        "description": "浏览器 Profile 路径或名称",
+        "type": "string",
+        "condition": {
+          "cookie_source": "浏览器 Profile"
+        },
+        "hint": "推荐填 Profile 的完整目录，例如 /root/.config/chromium/Default；留空时由 yt-dlp 在当前 AstrBot 运行用户的默认浏览器目录中自动寻找。AstrBot 进程必须有权限读取该目录。",
+        "default": ""
+      },
+      "browser_keyring": {
+        "description": "Linux 浏览器密钥环",
+        "type": "string",
+        "options": [
+          "auto",
+          "BASICTEXT",
+          "GNOMEKEYRING",
+          "KWALLET",
+          "KWALLET5",
+          "KWALLET6"
+        ],
+        "condition": {
+          "cookie_source": "浏览器 Profile"
+        },
+        "hint": "通常保持 auto。若 Chromium 使用 --password-store=basic，或日志显示自动探测到了错误的桌面密钥环，可显式选 BASICTEXT。",
+        "default": "auto"
+      },
+      "browser_refresh_seconds": {
+        "description": "浏览器 Cookie 快照间隔（秒）",
+        "type": "int",
+        "condition": {
+          "cookie_source": "浏览器 Profile"
+        },
+        "hint": "解析前读取浏览器最新 Cookie 的最短间隔；并发消息会复用同一快照，避免频繁复制浏览器数据库。有效范围 15～3600，默认 60。",
+        "default": 60
+      },
+      "browser_wakeup_mode": {
+        "description": "自动启动浏览器续活",
+        "type": "string",
+        "options": [
+          "关闭",
+          "有头（推荐）",
+          "无头"
+        ],
+        "condition": {
+          "cookie_source": "浏览器 Profile"
+        },
+        "hint": "每到下面的登录态体检周期，插件会短暂访问一次 YouTube，随后只关闭自己启动的进程；检测到登录态失效时也会自动尝试一次。有图形桌面优先用有头模式，浏览器指纹更接近日常访问；无头模式只适合没有桌面的服务器，触发机器人验证的概率更高。若同一 Profile 的浏览器已经在运行，插件会保留现有进程，不会误关。",
+        "default": "关闭"
+      },
+      "browser_wakeup_timeout_seconds": {
+        "description": "浏览器续活停留时间（秒）",
+        "type": "int",
+        "condition": {
+          "cookie_source": "浏览器 Profile"
+        },
+        "hint": "插件启动的浏览器在 YouTube 停留多久后自动关闭，有效范围 10～120。网络正常时 30 秒足够完成页面请求与凭据轮换。",
+        "default": 30
+      },
+      "browser_executable": {
+        "description": "浏览器可执行文件（可留空）",
+        "type": "string",
+        "condition": {
+          "cookie_source": "浏览器 Profile"
+        },
+        "hint": "仅自动续活找不到浏览器时填写完整路径。留空会按浏览器类型从 PATH 自动寻找。",
+        "default": ""
+      },
+      "browser_display": {
+        "description": "有头浏览器 DISPLAY（可留空）",
+        "type": "string",
+        "condition": {
+          "cookie_source": "浏览器 Profile"
+        },
+        "hint": "仅有头续活使用。留空会先读 AstrBot 的 DISPLAY，再从 /tmp/.X11-unix 自动寻找；多桌面服务器可显式填写，例如 :10.0。",
+        "default": ""
+      },
       "notify_admin_on_cookie_expired": {
         "description": "Cookie 失效时私聊提醒管理员",
         "type": "bool",
-        "hint": "YouTube 没有可用的扫码登录接口，Cookie 只能手动重新导出。开启后，一旦检测到已填写的 Cookie 被服务端当成未登录（或视频仍被机器人验证挡下），插件会私聊上面权限设置里的管理员提醒重新导出，冷却时间见下一项。需要管理员先私聊过机器人一次，插件才知道往哪发。",
+        "hint": "开启后，一旦当前手动 Cookie 或浏览器 Profile 被服务端当成未登录，插件会私聊管理员。浏览器模式会先自动唤醒并复检，仍失败才提醒你登录；手动模式则提醒重新导出。需要管理员先私聊过机器人一次，插件才知道往哪发。",
         "default": true
       },
       "cookie_alert_cooldown_minutes": {
@@ -751,19 +856,22 @@
       "cookie": {
         "description": "YouTube Cookie",
         "type": "text",
-        "hint": "留空即可解析公开视频。部分视频会被 YouTube 的「Sign in to confirm you are not a bot」门禁挡住（机房 IP 尤其常见），此时只能出封面卡片；填入登录后的完整 Cookie（必须包含 SAPISID 或 __Secure-3PAPISID，否则鉴权无效）可绕过门禁并解析年龄限制内容，填写后会自动追加 tv、web 两个支持鉴权的客户端。三种格式都可以直接整段粘贴：cookies.txt（Netscape 格式，Get cookies.txt LOCALLY 的产物）、扩展导出的 JSON 数组（Cookie-Editor / EditThisCookie）、或 a=1; b=2 形式的 Cookie 请求头，插件会自动识别并转换（这里是多行输入框，整段粘贴不会丢换行；万一换行还是被吞掉，插件也能按字段结构还原）。导出时建议用无痕窗口登录小号，导出完成后直接关掉整个窗口（不要点登出），这样会话不会被服务端作废。仅本地使用，不要公开分享；账号有被风控的风险，建议用小号。",
+        "hint": "仅“手动填写”模式使用；浏览器 Profile 模式会忽略本字段。留空仍可匿名解析公开视频。必须包含 SAPISID 或 __Secure-3PAPISID 才能鉴权。支持 cookies.txt、扩展导出的 JSON 数组或 a=1; b=2 请求头格式。Cookie 是登录凭据，只能保存在本机配置，绝不能上传仓库或发送给他人。",
         "default": ""
       },
       "cookie_auto_refresh": {
         "description": "自动跟进 Cookie 轮换（推荐开启）",
         "type": "bool",
-        "hint": "YouTube 会不断通过 Set-Cookie 轮换 __Secure-1PSIDTS / __Secure-3PSIDTS / SIDCC 等短命凭据，真实浏览器是静默跟进的，所以你在电脑上永远不会掉登录。开启本项后插件同样跟进这些新值并落盘到缓存目录，重启后接着用，于是一份手工导出的 Cookie 可以长期免维护。关闭则永远原样回放配置里那份静态字符串，Cookie 会随时间腐烂失效。",
+        "condition": {
+          "cookie_source": "手动填写"
+        },
+        "hint": "仅手动模式使用。开启后跟进 __Secure-1PSIDTS / __Secure-3PSIDTS / SIDCC 等服务端轮换并落盘；关闭则永远原样回放配置里的静态文本。浏览器 Profile 模式由浏览器自身负责轮换，不受此项影响。",
         "default": true
       },
       "cookie_keepalive_hours": {
-        "description": "Cookie 体检间隔（小时，0=关闭维护）",
+        "description": "登录态体检间隔（小时，0=关闭维护）",
         "type": "int",
-        "hint": "登录态体检的间隔。后台维护任务分两档跑：每 20 分钟向 Google 的凭据轮换端点发一个空请求，把服务端下发的新凭据吸收下来（这是浏览器永不掉登录的原理，也是长期免维护的关键）；每到这里设定的间隔再额外做一次登录态体检，失效时按上面的设置提醒管理员。默认 6 小时，最大 168；填 0 会连轮换一起关掉，Cookie 将只在每次解析时被动跟进轮换，寿命明显变短。",
+        "hint": "手动模式每 20 分钟跟进凭据轮换，并按此周期验证登录态；浏览器模式每 20 分钟读取一次最新 Profile，并按此周期执行浏览器自动续活与服务端复检。默认 6 小时，最大 168；填 0 会关闭后台维护，但解析前仍会读取浏览器快照。",
         "default": 6
       },
       "ytdlp_fallback": {

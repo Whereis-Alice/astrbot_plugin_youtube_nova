@@ -19,6 +19,8 @@ _REASON_TEXTS = {
         "定期 Cookie 体检请求被 YouTube 判定为未登录，"
         "说明这份 Cookie 已经无法靠自动跟进轮换救回来"
     ),
+    "browser_cookie_unavailable": "连续三次无法读取服务器浏览器 Profile",
+    "browser_cookie_signed_out": "浏览器 Profile 中没有可鉴权的 YouTube 登录凭据",
 }
 
 
@@ -31,6 +33,7 @@ class YouTubeCookieNoticeManager(AdminAssistManager):
         admin_id: str,
         enabled: bool,
         request_cooldown_minutes: int = 120,
+        browser_profile_mode: bool = False,
     ):
         """初始化 YouTube Cookie 提醒管理器。"""
         super().__init__(
@@ -41,6 +44,7 @@ class YouTubeCookieNoticeManager(AdminAssistManager):
             reply_timeout_minutes=1,
             request_cooldown_minutes=request_cooldown_minutes,
         )
+        self.browser_profile_mode = bool(browser_profile_mode)
 
     async def handle_admin_reply(
         self, event: AstrMessageEvent, *args: Any, **kwargs: Any
@@ -77,8 +81,18 @@ class YouTubeCookieNoticeManager(AdminAssistManager):
             self._last_request_at = now
 
         cooldown_minutes = int(self.request_cooldown_seconds / 60)
-        text = "\n".join(
-            [
+        if self.browser_profile_mode:
+            lines = [
+                "检测到服务器浏览器的 YouTube 登录态不可用，视频解析会退化成只发封面。",
+                f"原因: {self.describe_reason(reason)}",
+                "插件已尝试自动启动浏览器访问 YouTube 并复检。",
+                "仍未恢复时，请在服务器 Chromium 中重新登录一次 YouTube；不要点退出登录。",
+                "之后插件会定期用同一 Profile 自动续活，无需导出 Cookie。",
+                "如果这条提醒反复出现，多半是出口 IP 信誉问题，建议给 proxy.youtube 配住宅代理。",
+                f"本提醒 {cooldown_minutes} 分钟内只发一次。",
+            ]
+        else:
+            lines = [
                 "检测到 YouTube Cookie 已失效，视频解析会退化成只发封面。",
                 f"原因: {self.describe_reason(reason)}",
                 "处理方式（YouTube 无法扫码登录，只能手动更新）:",
@@ -90,7 +104,7 @@ class YouTubeCookieNoticeManager(AdminAssistManager):
                 "如果这条提醒反复出现，多半是出口 IP 信誉问题，建议给 proxy.youtube 配住宅代理。",
                 f"本提醒 {cooldown_minutes} 分钟内只发一次。",
             ]
-        )
+        text = "\n".join(lines)
         if fallback:
             # 没见过管理员私聊，只能发到他最近说话的会话（可能是群）。
             text += (

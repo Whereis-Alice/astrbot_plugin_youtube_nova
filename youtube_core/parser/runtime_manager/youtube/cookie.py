@@ -419,6 +419,10 @@ class YouTubeCookieRuntime:
         """用配置里的 Cookie 初始化，并尽量接续上次落盘的轮换结果。"""
         self._configured = (configured_cookie or "").strip()
         self._fingerprint = self._make_fingerprint(self._configured)
+        self._source_label = "手动 Cookie" if self._configured else ""
+        # 浏览器快照的指纹只用于判断 Profile 是否真的更新。解析请求吸收到的
+        # Set-Cookie 可以继续覆盖内存罐子；Profile 未变化时不会被旧快照倒灌。
+        self._external_source_fingerprint: Optional[str] = None
         self.state_path = (state_path or "").strip()
         self.auto_refresh = bool(auto_refresh)
 
@@ -449,6 +453,11 @@ class YouTubeCookieRuntime:
     def configured_cookie(self) -> str:
         """返回配置里原始的 Cookie 字符串。"""
         return self._configured
+
+    @property
+    def source_label(self) -> str:
+        """返回当前凭据来源的安全标签，不含任何 Cookie 取值。"""
+        return self._source_label
 
     @property
     def revision(self) -> int:
@@ -537,11 +546,49 @@ class YouTubeCookieRuntime:
         """返回当前罐子里的 Cookie 名（只回名字，绝不回取值）。"""
         return tuple(self._jar)
 
+    def replace_from_source(
+        self,
+        cookie: str,
+        source_label: str = "浏览器 Profile",
+        source_fingerprint: str = "",
+    ) -> bool:
+        """用外部权威来源的新快照替换当前基线。
+
+        同一快照不会反复覆盖解析过程中吸收到的更新值。只有浏览器 Profile
+        实际发生变化时才清空旧健康判定，让新登录态重新参与一次请求。
+        """
+        normalized = normalize_cookie_input(cookie)
+        fingerprint = source_fingerprint or self._make_fingerprint(normalized)
+        if self._external_source_fingerprint == fingerprint:
+            return False
+
+        self._external_source_fingerprint = fingerprint
+        self._configured = normalized
+        self._fingerprint = self._make_fingerprint(normalized)
+        self._source_label = (source_label or "浏览器 Profile").strip()
+        self._jar = parse_cookie_header(normalized)
+        self._mutated = False
+        self._dirty = False
+        self._revision += 1
+        self._alive = None
+        self._dead_reason = ""
+        self._dead_since = 0.0
+        self._failure_streak = 0
+        self._last_keepalive_ok = None
+        return True
+
     def status_line(self) -> str:
         """给日志用的一行状态摘要，不含任何 Cookie 取值。"""
         if not self._configured:
+            if self._source_label:
+                return f"来源={self._source_label}，未读取到 Cookie"
             return "未配置"
-        parts = [f"{len(self._jar)} 项", "已鉴权" if self.authenticated else "缺少 SAPISID"]
+        parts = []
+        if self._source_label:
+            parts.append(f"来源={self._source_label}")
+        parts.extend(
+            [f"{len(self._jar)} 项", "已鉴权" if self.authenticated else "缺少 SAPISID"]
+        )
         if self._alive is False:
             label = "已判定失效，按匿名请求"
             if self._dead_reason:

@@ -31,6 +31,9 @@ from ...constants import Config
 from ...logger import logger
 from ...types import MediaMetadata
 from ..runtime_manager.youtube import (
+    BrowserCookieError,
+    BrowserCookieSource,
+    BrowserCookieSpec,
     YOUTUBE_ORIGIN,
     YouTubeCookieRuntime,
     YtDlpStream,
@@ -1491,6 +1494,14 @@ class YouTubeParser(BaseVideoParser):
         cookie_alert_enabled: bool = False,
         cookie_state_file: str = "",
         cookie_auto_refresh: bool = True,
+        browser_cookie_name: str = "",
+        browser_cookie_profile: str = "",
+        browser_cookie_keyring: str = "",
+        browser_cookie_refresh_seconds: int = 60,
+        browser_cookie_executable: str = "",
+        browser_cookie_display: str = "",
+        browser_cookie_wakeup_mode: str = "off",
+        browser_cookie_wakeup_timeout_seconds: int = 30,
         ytdlp_fallback: bool = True,
         ytdlp_js_runtime: str = "auto",
         ytdlp_timeout: int = 60,
@@ -1509,8 +1520,26 @@ class YouTubeParser(BaseVideoParser):
             state_path=cookie_state_file,
             auto_refresh=cookie_auto_refresh,
         )
-        # 只有能算出 SAPISIDHASH 的 cookie 才算「真登录」，否则退回匿名。
-        self.cookie_authenticated = self.cookie_runtime.authenticated
+        self.browser_cookie_source: Optional[BrowserCookieSource] = None
+        browser_name = str(browser_cookie_name or "").strip().lower()
+        if browser_name:
+            try:
+                self.browser_cookie_source = BrowserCookieSource(
+                    BrowserCookieSpec(
+                        browser=browser_name,
+                        profile=browser_cookie_profile,
+                        keyring=browser_cookie_keyring,
+                        executable=browser_cookie_executable,
+                        display=browser_cookie_display,
+                    ),
+                    refresh_seconds=browser_cookie_refresh_seconds,
+                    wakeup_mode=browser_cookie_wakeup_mode,
+                    wakeup_timeout_seconds=(
+                        browser_cookie_wakeup_timeout_seconds
+                    ),
+                )
+            except ValueError as exc:
+                logger.warning(f"[youtube] 浏览器 Cookie 配置无效，退回匿名: {exc}")
         self.proxy = proxy
         self.max_height = max(0, _as_int(max_height))
         # 聊天平台发得出去的体积上限：选流时当预算用，免得下完 129MB 才发现
@@ -1547,7 +1576,11 @@ class YouTubeParser(BaseVideoParser):
         # 只驻内存不落盘——它本身是短期票据，跨重启复用没有意义。
         self._visitor_data = ""
         self.semaphore = asyncio.Semaphore(Config.PARSER_MAX_CONCURRENT)
-        if self.cookie and not self.cookie_authenticated:
+        if (
+            self.cookie
+            and self.browser_cookie_source is None
+            and not self.cookie_authenticated
+        ):
             recognized = len(parse_cookie_header(self.cookie))
             logger.warning(
                 f"[youtube] 已配置 cookie（识别出 {recognized} 项），但其中"
@@ -1558,6 +1591,63 @@ class YouTubeParser(BaseVideoParser):
             )
 
     _NA = "n/a"
+
+    @property
+    def cookie_authenticated(self) -> bool:
+        """当前快照能否生成 SAPISIDHASH；浏览器同步后会动态变化。"""
+        return self.cookie_runtime.authenticated
+
+    @property
+    def cookie_maintenance_enabled(self) -> bool:
+        """是否存在需要后台同步或维护的 Cookie 来源。"""
+        return bool(self.browser_cookie_source or self.cookie_runtime.header())
+
+    def cookie_recovery_hint(self) -> str:
+        """返回与当前凭据来源一致的恢复建议。"""
+        if self.browser_cookie_source is not None:
+            return "请确认服务器 Chromium 仍保持 YouTube 登录并可访问该 Profile"
+        return "请重新导出并填写 YouTube Cookie"
+
+    async def _sync_browser_cookie(
+        self,
+        force: bool = False,
+    ) -> Tuple[bool, str]:
+        """把浏览器的最新快照同步进 Innertube Cookie 运行时。"""
+        source = self.browser_cookie_source
+        if source is None:
+            return False, "未启用浏览器 Profile"
+        try:
+            snapshot, freshly_read = await source.refresh(force=force)
+        except asyncio.CancelledError:
+            raise
+        except BrowserCookieError as exc:
+            if source.failure_streak >= 3:
+                self._mark_cookie_alert("browser_cookie_unavailable")
+            return False, f"浏览器 Profile 读取失败: {exc}"
+
+        changed = self.cookie_runtime.replace_from_source(
+            snapshot.header,
+            source_label=f"浏览器 {source.spec.label()}",
+            source_fingerprint=snapshot.fingerprint,
+        )
+        if changed:
+            if snapshot.authenticated:
+                logger.info(
+                    "[youtube] 已同步浏览器登录态: "
+                    f"profile={source.spec.label()}，{snapshot.cookie_count} 项，已鉴权"
+                )
+            else:
+                logger.warning(
+                    "[youtube] 浏览器 Profile 未读到可鉴权的 YouTube 登录态: "
+                    f"profile={source.spec.label()}，{snapshot.cookie_count} 项，"
+                    "缺少 SAPISID / __Secure-3PAPISID"
+                )
+                self._mark_cookie_alert("browser_cookie_signed_out")
+        freshness = "已读取最新快照" if freshly_read else "使用近期快照"
+        auth = "已鉴权" if snapshot.authenticated else "缺少登录凭据"
+        return snapshot.authenticated, (
+            f"{freshness}，{snapshot.cookie_count} 项，{auth}"
+        )
 
     @property
     def player_clients(self) -> Tuple[str, ...]:
@@ -1580,15 +1670,20 @@ class YouTubeParser(BaseVideoParser):
 
     def _login_label(self, cookie_expired: bool) -> str:
         """把当前登录态压缩成一个可读标签。"""
-        if not self.cookie:
+        source_prefix = (
+            "browser" if self.browser_cookie_source is not None else "cookie"
+        )
+        if not self.cookie_runtime.header():
+            if self.browser_cookie_source is not None:
+                return "browser(未读取到登录态，按匿名处理)"
             return "匿名"
         if not self.cookie_authenticated:
-            return "cookie(缺少 SAPISID，按匿名处理)"
+            return f"{source_prefix}(缺少 SAPISID，按匿名处理)"
         if cookie_expired:
-            return "cookie(已失效)"
+            return f"{source_prefix}(已失效)"
         if not self.cookie_runtime.usable:
-            return "cookie(已判定失效，按匿名请求)"
-        return "cookie(已鉴权)"
+            return f"{source_prefix}(已判定失效，按匿名请求)"
+        return f"{source_prefix}(已鉴权)"
 
     def _proxy_label(self) -> str:
         """返回代理配置状态标签。"""
@@ -1599,12 +1694,15 @@ class YouTubeParser(BaseVideoParser):
         """针对门禁类失败给出可操作建议，其余情况返回空串。"""
         if status_code in _GATED_STATUS_CODES:
             return (
-                "；处理建议: 在插件配置 youtube.cookie 填入有效的 YouTube 登录 "
-                "Cookie，或给 proxy.youtube 换一个住宅/家宽出口（机房 IP 极易被"
-                "要求人机验证）"
+                "；处理建议: 启用有效的浏览器 Profile 登录态或填写 "
+                "youtube.cookie，也可给 proxy.youtube 换一个住宅/家宽出口"
+                "（机房 IP 极易被要求人机验证）"
             )
         if cookie_expired:
-            return "；处理建议: 重新导出 YouTube Cookie（现有 Cookie 已失效）"
+            return (
+                "；处理建议: 检查浏览器登录态，或重新导出手动 Cookie"
+                "（现有凭据已失效）"
+            )
         return ""
 
     def _ytdlp_advice(self) -> str:
@@ -1636,6 +1734,11 @@ class YouTubeParser(BaseVideoParser):
                 pot_provider=self.ytdlp_pot_provider,
                 fetch_pot=self.ytdlp_fetch_pot,
                 max_bytes=self.stream_max_bytes,
+                cookies_from_browser=(
+                    self.browser_cookie_source.ytdlp_tuple()
+                    if self.browser_cookie_source is not None
+                    else None
+                ),
             )
         return self._ytdlp
 
@@ -1700,8 +1803,13 @@ class YouTubeParser(BaseVideoParser):
         try:
             stream, info = await resolver.resolve_full(
                 video_id,
-                cookie_header=self.cookie_runtime.active_header(),
+                cookie_header=(
+                    ""
+                    if self.browser_cookie_source is not None
+                    else self.cookie_runtime.active_header()
+                ),
                 cookie_revision=self.cookie_runtime.revision,
+                use_browser_cookies=self.cookie_runtime.usable,
             )
         except asyncio.CancelledError:
             raise
@@ -1731,7 +1839,10 @@ class YouTubeParser(BaseVideoParser):
 
     def _mark_cookie_alert(self, reason: str) -> None:
         """标记 Cookie 已失效，供插件侧决定是否私聊管理员。"""
-        if not self.cookie_alert_enabled or not self.cookie_authenticated:
+        has_managed_source = self.browser_cookie_source is not None
+        if not self.cookie_alert_enabled or not (
+            has_managed_source or self.cookie_authenticated
+        ):
             return
         self._cookie_alert_pending = True
         self._cookie_alert_reason = reason or "cookie_expired"
@@ -2076,6 +2187,32 @@ class YouTubeParser(BaseVideoParser):
     ) -> Optional[MediaMetadata]:
         async with self.semaphore:
             try:
+                if self.browser_cookie_source is not None:
+                    # Normal parses only read the recent profile snapshot. If a
+                    # previous request proved it dead, give Chromium one chance
+                    # to refresh the account session before falling back anonymous.
+                    if self.cookie_runtime.alive is False:
+                        wake_ok, wake_detail = (
+                            await self.browser_cookie_source.wakeup()
+                        )
+                        logger.info(
+                            "[youtube] 浏览器登录态恢复尝试: "
+                            f"{wake_detail}"
+                        )
+                        await self._sync_browser_cookie(force=wake_ok)
+                        if wake_ok and self.cookie_runtime.authenticated:
+                            logged_in, detail = await self.cookie_runtime.keepalive(
+                                session,
+                                proxy=self.proxy,
+                                timeout_seconds=20.0,
+                            )
+                            logger.info(
+                                "[youtube] 浏览器登录态恢复复检: " + detail
+                            )
+                            if logged_in is True:
+                                self.cookie_runtime.mark_alive()
+                    else:
+                        await self._sync_browser_cookie()
                 return await self._parse(session, url)
             finally:
                 # 解析途中吸收到的 Cookie 轮换在这里统一落盘，
@@ -2088,6 +2225,13 @@ class YouTubeParser(BaseVideoParser):
         timeout_seconds: float = 20.0,
     ) -> Tuple[Optional[bool], str]:
         """主动跑一次 Cookie 体检请求，返回 (登录态, 可读摘要)。"""
+        if self.browser_cookie_source is not None:
+            wake_ok, wake_detail = await self.browser_cookie_source.wakeup()
+            _synced, sync_detail = await self._sync_browser_cookie(
+                force=wake_ok
+            )
+            if not self.cookie_runtime.authenticated:
+                return False, f"唤醒: {wake_detail}；同步: {sync_detail}"
         return await self.cookie_runtime.keepalive(
             session,
             proxy=self.proxy,
@@ -2105,6 +2249,38 @@ class YouTubeParser(BaseVideoParser):
         浏览器里 __Secure-1PSIDTS 每十几分钟就换一次，凭据放着不动反而更容易
         被判失效。verify=False 时只做轻量轮换，需要确认登录态时再传 True。
         """
+        if self.browser_cookie_source is not None:
+            parts: List[str] = []
+            should_verify = verify or self.cookie_runtime.alive is False
+            if should_verify:
+                wake_ok, wake_detail = await self.browser_cookie_source.wakeup()
+                parts.append(f"浏览器唤醒: {wake_detail}")
+            else:
+                wake_ok = False
+            _synced, sync_detail = await self._sync_browser_cookie(
+                force=(should_verify and wake_ok)
+            )
+            parts.append(f"Profile 同步: {sync_detail}")
+            if not self.cookie_runtime.authenticated:
+                self.cookie_runtime.mark_dead("浏览器 Profile 缺少登录凭据")
+                await self.cookie_runtime.flush()
+                return False, "；".join(parts)
+            if not should_verify:
+                return None, "；".join(parts)
+
+            logged_in, verify_detail = await self.cookie_runtime.keepalive(
+                session,
+                proxy=self.proxy,
+                timeout_seconds=timeout_seconds,
+            )
+            parts.append(f"验证: {verify_detail}")
+            if logged_in is True:
+                self.cookie_runtime.mark_alive()
+            elif logged_in is False:
+                self.cookie_runtime.mark_dead("服务端判定浏览器登录态无效")
+            await self.cookie_runtime.flush()
+            return logged_in, "；".join(parts)
+
         return await self.cookie_runtime.maintain(
             session,
             proxy=self.proxy,
