@@ -1,0 +1,4 @@
+aiohttp>=3.12,<4
+pillow>=10,<13
+yt-dlp>=2026.8.19
+yt-dlp-ejs>=0.8.0

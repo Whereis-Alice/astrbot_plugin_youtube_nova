@@ -1,0 +1,29 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.idea/
+.vscode/
+*.log
+
+# Runtime media and credentials
+cache/
+data/
+/runtime_manager/
+**/runtime_manager/cookie.json
+**/runtime_manager/youtube/cookie.json
+**/cookies.txt
+*.cookies.txt
+.env
+.env.*
+!.env.example
+
+# Generated archives and card previews
+*.zip
+card_*.png
+preview_*.png

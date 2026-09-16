@@ -1,0 +1,509 @@
+"""Provider-aware LLM adapter for metadata translation."""
+
+from __future__ import annotations
+
+import asyncio
+import copy
+import json
+from dataclasses import dataclass
+from email.utils import parsedate_to_datetime
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+
+import aiohttp
+
+from ..logger import logger
+from .provider_defs import LLM_PROVIDER_DEFAULTS
+
+
+@dataclass(frozen=True)
+class LLMProviderDefinition:
+    key: str
+    protocol: str
+    default_base_url: str
+    requires_api_key: bool
+    token_limit_field: str = "max_tokens"
+
+
+@dataclass
+class ProviderHttpRequest:
+    url: str
+    headers: Dict[str, str]
+    json: Dict[str, Any]
+
+
+class LLMHTTPError(RuntimeError):
+    """Structured HTTP error returned by an LLM provider."""
+
+    def __init__(
+        self,
+        status: int,
+        response_text: str,
+        error_payload: Optional[Dict[str, Any]] = None,
+    ):
+        payload = error_payload if isinstance(error_payload, dict) else {}
+        error = payload.get("error")
+        if not isinstance(error, dict):
+            error = payload
+        self.status = int(status)
+        self.code = str(error.get("code", "") or "").strip().lower()
+        self.error_type = str(error.get("type", "") or "").strip().lower()
+        self.parameter = (
+            str(
+                error.get("param", "")
+                or error.get("parameter", "")
+                or error.get("field", "")
+                or ""
+            )
+            .strip()
+            .lower()
+        )
+        detail = str(
+            error.get("message", "")
+            or payload.get("message", "")
+            or response_text
+            or "empty response"
+        ).strip()
+        super().__init__(f"HTTP {self.status}: {detail}")
+
+
+PROVIDER_DEFINITIONS: Dict[str, LLMProviderDefinition] = {
+    key: LLMProviderDefinition(
+        key=key,
+        protocol=str(value.get("protocol", "openai") or "openai"),
+        default_base_url=str(value.get("base_url", "") or ""),
+        requires_api_key=bool(value.get("requires_api_key", True)),
+        token_limit_field=str(
+            value.get("token_limit_field", "max_tokens") or "max_tokens"
+        ),
+    )
+    for key, value in LLM_PROVIDER_DEFAULTS.items()
+}
+
+
+class LLMClient:
+    """Build provider-specific requests and extract text responses."""
+
+    # 值得重试的状态码：限流与网关类临时故障
+    RETRY_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+    MAX_TRANSPORT_ATTEMPTS = 3
+    RETRY_BASE_DELAY_SECONDS = 1.0
+    MAX_RETRY_DELAY_SECONDS = 30.0
+
+    def __init__(
+        self,
+        config: Any,
+        session: Optional[aiohttp.ClientSession] = None,
+    ):
+        self.config = config
+        # 复用同一个 ClientSession，避免每批翻译都新建连接池
+        self._session: Optional[aiohttp.ClientSession] = session
+        self._owns_session = session is None
+        self._session_lock = asyncio.Lock()
+
+    async def _ensure_session(self) -> aiohttp.ClientSession:
+        """惰性创建并复用 ClientSession；外部传入的 session 优先使用。"""
+        session = self._session
+        if session is not None and not session.closed:
+            return session
+        async with self._session_lock:
+            if self._session is None or self._session.closed:
+                self._session = aiohttp.ClientSession()
+                self._owns_session = True
+            return self._session
+
+    async def aclose(self) -> None:
+        """关闭自建的 ClientSession；外部传入的 session 交由调用方关闭。"""
+        session = self._session
+        owns_session = self._owns_session
+        self._session = None
+        self._owns_session = True
+        if session is not None and owns_session and not session.closed:
+            await session.close()
+
+    def missing_fields(self) -> List[str]:
+        provider = self._provider_definition()
+        missing: List[str] = []
+        if not self._model():
+            missing.append("模型")
+        if provider.requires_api_key and not self._api_key():
+            missing.append("API Key")
+        if provider.protocol in {"openai", "ollama"} and not self._base_url():
+            missing.append("Base URL")
+        return missing
+
+    async def complete(
+        self,
+        payload: Dict[str, Any],
+        *,
+        timeout_seconds: int,
+    ) -> str:
+        timeout = aiohttp.ClientTimeout(total=max(10, int(timeout_seconds)))
+        drop_temperature = False
+        token_limit_field = self._provider_definition().token_limit_field
+        # build_http_request 内部已对 payload 深拷贝，这里无需重复 deepcopy
+        working_payload = payload
+        retried_token_limit_field = False
+        retried_temperature = False
+        previous_http_error: Optional[LLMHTTPError] = None
+
+        session = await self._ensure_session()
+        for _ in range(3):
+            request = self.build_http_request(
+                working_payload,
+                drop_temperature=drop_temperature,
+                token_limit_field=token_limit_field,
+            )
+            try:
+                return await self._post_with_retry(session, request, timeout=timeout)
+            except LLMHTTPError as exc:
+                if previous_http_error is not None:
+                    exc.__cause__ = previous_http_error
+                if (
+                    not retried_token_limit_field
+                    and self._should_retry_token_limit_field(
+                        exc,
+                        token_limit_field,
+                    )
+                ):
+                    retried_token_limit_field = True
+                    token_limit_field = self._alternate_token_limit_field(
+                        token_limit_field
+                    )
+                    previous_http_error = exc
+                    continue
+                if not retried_temperature and self._should_drop_temperature(exc):
+                    retried_temperature = True
+                    drop_temperature = True
+                    previous_http_error = exc
+                    continue
+                if previous_http_error is not None:
+                    raise exc from previous_http_error
+                raise
+
+        if previous_http_error is not None:
+            raise RuntimeError("LLM 请求在参数协商后仍失败") from previous_http_error
+        raise RuntimeError("LLM 请求失败")
+
+    async def _post_with_retry(
+        self,
+        session: aiohttp.ClientSession,
+        request: ProviderHttpRequest,
+        *,
+        timeout: aiohttp.ClientTimeout,
+    ) -> str:
+        """发送单次翻译请求；对 429/5xx 与网络抖动做指数退避重试（最多 3 次）。"""
+        last_error: Optional[BaseException] = None
+        for attempt in range(self.MAX_TRANSPORT_ATTEMPTS):
+            is_last_attempt = attempt >= self.MAX_TRANSPORT_ATTEMPTS - 1
+            try:
+                async with session.post(
+                    request.url,
+                    json=request.json,
+                    headers=request.headers,
+                    timeout=timeout,
+                ) as response:
+                    body = await response.text()
+                    if response.status >= 400:
+                        error = LLMHTTPError(
+                            response.status,
+                            body,
+                            self._load_error_payload(body),
+                        )
+                        if (
+                            response.status in self.RETRY_STATUS_CODES
+                            and not is_last_attempt
+                        ):
+                            delay = self._retry_delay_seconds(
+                                response.headers.get("Retry-After"),
+                                attempt,
+                            )
+                            logger.warning(
+                                f"LLM 请求返回 HTTP {response.status}，"
+                                f"{delay:.1f}s 后重试"
+                                f"（第 {attempt + 2}/{self.MAX_TRANSPORT_ATTEMPTS} 次）"
+                            )
+                            last_error = error
+                            await asyncio.sleep(delay)
+                            continue
+                        raise error
+                    return self.extract_content(json.loads(body))
+            except asyncio.CancelledError:
+                raise
+            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+                if is_last_attempt:
+                    raise
+                last_error = exc
+                delay = self._retry_delay_seconds(None, attempt)
+                logger.warning(
+                    f"LLM 请求网络异常，{delay:.1f}s 后重试"
+                    f"（第 {attempt + 2}/{self.MAX_TRANSPORT_ATTEMPTS} 次）: {exc}"
+                )
+                await asyncio.sleep(delay)
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError("LLM 请求失败")
+
+    @classmethod
+    def _retry_delay_seconds(
+        cls,
+        retry_after: Optional[str],
+        attempt: int,
+    ) -> float:
+        """计算退避时长：优先尊重 Retry-After，否则按指数退避。"""
+        parsed = cls._parse_retry_after(retry_after)
+        if parsed is not None:
+            return parsed
+        delay = cls.RETRY_BASE_DELAY_SECONDS * (2 ** max(0, int(attempt)))
+        return min(delay, cls.MAX_RETRY_DELAY_SECONDS)
+
+    @classmethod
+    def _parse_retry_after(cls, retry_after: Optional[str]) -> Optional[float]:
+        """解析 Retry-After（支持秒数与 HTTP-date 两种格式）。"""
+        raw = str(retry_after or "").strip()
+        if not raw:
+            return None
+        try:
+            seconds = float(raw)
+        except (TypeError, ValueError):
+            seconds = None
+        if seconds is None:
+            try:
+                deadline = parsedate_to_datetime(raw)
+            except (TypeError, ValueError):
+                return None
+            if deadline is None:
+                return None
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=timezone.utc)
+            seconds = (deadline - datetime.now(timezone.utc)).total_seconds()
+        if seconds < 0:
+            return 0.0
+        return min(seconds, cls.MAX_RETRY_DELAY_SECONDS)
+
+    def build_http_request(
+        self,
+        payload: Dict[str, Any],
+        *,
+        drop_temperature: bool = False,
+        token_limit_field: Optional[str] = None,
+    ) -> ProviderHttpRequest:
+        provider = self._provider_definition()
+        model = self._model()
+        if not model:
+            raise RuntimeError("未配置翻译模型")
+        if provider.requires_api_key and not self._api_key():
+            raise RuntimeError("未配置翻译 API Key")
+
+        builder = {
+            "openai": self._build_openai_request,
+            "ollama": self._build_ollama_request,
+        }.get(provider.protocol)
+        if not builder:
+            raise RuntimeError(f"不支持的 LLM 协议: {provider.protocol}")
+        return builder(
+            payload,
+            drop_temperature=drop_temperature,
+            token_limit_field=token_limit_field,
+        )
+
+    def extract_content(self, response: Dict[str, Any]) -> str:
+        provider = self._provider_definition()
+        parser = {
+            "openai": self._extract_openai_content,
+            "ollama": self._extract_ollama_content,
+        }.get(provider.protocol)
+        if not parser:
+            raise RuntimeError(f"不支持的 LLM 协议: {provider.protocol}")
+        return parser(response)
+
+    def _provider_definition(self) -> LLMProviderDefinition:
+        provider_key = str(getattr(self.config, "llm_provider", "") or "").strip()
+        return PROVIDER_DEFINITIONS.get(
+            provider_key,
+            PROVIDER_DEFINITIONS["openai_compatible"],
+        )
+
+    def _model(self) -> str:
+        return str(getattr(self.config, "model", "") or "").strip()
+
+    def _api_key(self) -> str:
+        return str(getattr(self.config, "api_key", "") or "").strip()
+
+    def _base_url(self) -> str:
+        return str(getattr(self.config, "base_url", "") or "").strip().rstrip("/")
+
+    def _build_openai_request(
+        self,
+        payload: Dict[str, Any],
+        *,
+        drop_temperature: bool,
+        token_limit_field: Optional[str],
+    ) -> ProviderHttpRequest:
+        body = copy.deepcopy(payload)
+        self._apply_token_limit_field(
+            body,
+            self._token_limit_field(token_limit_field),
+        )
+        if drop_temperature:
+            body.pop("temperature", None)
+        url = self._join_chat_completions_url(
+            self._base_url() or self._provider_definition().default_base_url
+        )
+        headers = {
+            "Authorization": f"Bearer {self._api_key()}",
+            "Content-Type": "application/json",
+        }
+        return ProviderHttpRequest(url=url, headers=headers, json=body)
+
+    def _build_ollama_request(
+        self,
+        payload: Dict[str, Any],
+        *,
+        drop_temperature: bool,
+        token_limit_field: Optional[str],
+    ) -> ProviderHttpRequest:
+        messages = copy.deepcopy(payload.get("messages") or [])
+        body: Dict[str, Any] = {
+            "model": self._model(),
+            "messages": messages,
+            "stream": False,
+        }
+        options: Dict[str, Any] = {}
+        if not drop_temperature and payload.get("temperature") is not None:
+            options["temperature"] = payload["temperature"]
+        max_tokens = self._extract_max_tokens(payload)
+        if max_tokens:
+            options["num_predict"] = max_tokens
+        if options:
+            body["options"] = options
+        url = self._join_path(
+            self._base_url() or self._provider_definition().default_base_url,
+            "/api/chat",
+        )
+        headers = {"Content-Type": "application/json"}
+        if self._api_key():
+            headers["Authorization"] = f"Bearer {self._api_key()}"
+        return ProviderHttpRequest(url=url, headers=headers, json=body)
+
+    @staticmethod
+    def _extract_openai_content(response: Dict[str, Any]) -> str:
+        choices = response.get("choices") or []
+        if not choices:
+            raise RuntimeError("LLM 响应中没有 choices")
+        message = choices[0].get("message") or {}
+        content = message.get("content")
+        if isinstance(content, str):
+            text = content.strip()
+        elif isinstance(content, list):
+            text = "".join(
+                part.get("text", "") if isinstance(part, dict) else str(part)
+                for part in content
+            ).strip()
+        else:
+            text = ""
+        if not text:
+            raise RuntimeError("LLM 返回空内容")
+        return text
+
+    @staticmethod
+    def _extract_ollama_content(response: Dict[str, Any]) -> str:
+        message = response.get("message") or {}
+        text = str(message.get("content", "") or "").strip()
+        if not text:
+            raise RuntimeError("LLM 返回空内容")
+        return text
+
+    @staticmethod
+    def _load_error_payload(body: str) -> Dict[str, Any]:
+        try:
+            payload = json.loads(str(body or ""))
+        except (json.JSONDecodeError, TypeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    @staticmethod
+    def _is_structured_parameter_error(error: LLMHTTPError) -> bool:
+        if error.status not in {400, 422}:
+            return False
+        return error.code in {
+            "unsupported_parameter",
+            "invalid_parameter",
+            "unknown_parameter",
+            "unrecognized_parameter",
+            "extra_forbidden",
+        } or error.error_type in {
+            "invalid_request_error",
+            "validation_error",
+        }
+
+    @classmethod
+    def _should_retry_token_limit_field(
+        cls,
+        error: LLMHTTPError,
+        submitted_field: str,
+    ) -> bool:
+        return (
+            error.parameter == submitted_field
+            and submitted_field in {"max_tokens", "max_completion_tokens"}
+            and cls._is_structured_parameter_error(error)
+        )
+
+    @classmethod
+    def _should_drop_temperature(cls, error: LLMHTTPError) -> bool:
+        return error.parameter == "temperature" and cls._is_structured_parameter_error(
+            error
+        )
+
+    def _token_limit_field(self, token_limit_field: Optional[str]) -> str:
+        if token_limit_field in {"max_tokens", "max_completion_tokens"}:
+            return str(token_limit_field)
+        provider = self._provider_definition()
+        if provider.token_limit_field in {"max_tokens", "max_completion_tokens"}:
+            return provider.token_limit_field
+        return "max_tokens"
+
+    @staticmethod
+    def _alternate_token_limit_field(token_limit_field: str) -> str:
+        if token_limit_field == "max_tokens":
+            return "max_completion_tokens"
+        return "max_tokens"
+
+    @staticmethod
+    def _apply_token_limit_field(body: Dict[str, Any], token_limit_field: str) -> None:
+        if token_limit_field == "max_completion_tokens":
+            if "max_completion_tokens" not in body and "max_tokens" in body:
+                body["max_completion_tokens"] = body.pop("max_tokens")
+            else:
+                body.pop("max_tokens", None)
+            return
+        if "max_completion_tokens" in body:
+            body["max_tokens"] = body.pop("max_completion_tokens")
+
+    def _extract_max_tokens(self, payload: Dict[str, Any]) -> int:
+        value = payload.get("max_completion_tokens")
+        if value is None:
+            value = payload.get("max_tokens")
+        try:
+            return max(1, int(value or 0))
+        except (TypeError, ValueError):
+            return 1
+
+    @staticmethod
+    def _join_chat_completions_url(base_url: str) -> str:
+        base = str(base_url or "").strip().rstrip("/")
+        if not base:
+            raise RuntimeError("未配置翻译 Base URL")
+        if base.endswith("/chat/completions"):
+            return base
+        return base + "/chat/completions"
+
+    @staticmethod
+    def _join_path(base_url: str, suffix: str) -> str:
+        base = str(base_url or "").strip().rstrip("/")
+        if not base:
+            raise RuntimeError("未配置翻译 Base URL")
+        normalized_suffix = "/" + suffix.lstrip("/")
+        if base.endswith(normalized_suffix):
+            return base
+        return base + normalized_suffix

@@ -1,0 +1,51 @@
+"""常量与默认配置定义。"""
+import os
+
+
+class Config:
+    """配置常量类，包含下载、解析等功能的配置参数"""
+    
+    DEFAULT_TIMEOUT = 30
+    VIDEO_SIZE_CHECK_TIMEOUT = 10
+    IMAGE_DOWNLOAD_TIMEOUT = 10
+    VIDEO_DOWNLOAD_TIMEOUT = 300
+
+    DEFAULT_LARGE_VIDEO_THRESHOLD_MB = 100.0
+    MAX_LARGE_VIDEO_THRESHOLD_MB = 100.0
+    # LLOneBot 实测在 53 MiB 整数边界拒收视频；默认留出转码与封装余量。
+    # 其他适配器可在配置中自行提高，0 表示不限制。
+    DEFAULT_SEND_VIDEO_MAX_MB = 48.0
+    # 超过可发送上限时先用 ffmpeg 重编码到上限以内再发送，压不下来才只发封面。
+    DEFAULT_TRANSCODE_OVERSIZE_VIDEO = True
+    DEFAULT_TRANSCODE_TIMEOUT_SECONDS = 600
+    MIN_TRANSCODE_TIMEOUT_SECONDS = 30
+    MAX_TRANSCODE_TIMEOUT_SECONDS = 3600
+    DOWNLOAD_RETRY_ATTEMPTS = 3
+    DOWNLOAD_RETRY_BASE_DELAY = 0.5
+    
+    STREAM_DOWNLOAD_CHUNK_SIZE = 2 * 1024 * 1024
+    
+    RANGE_DOWNLOAD_CHUNK_SIZE = 2 * 1024 * 1024
+    RANGE_DOWNLOAD_MAX_CONCURRENT = 64
+    
+    M3U8_MAX_CONCURRENT_SEGMENTS = 10
+    
+    DOWNLOAD_MANAGER_MAX_CONCURRENT = 5
+    PARSER_MAX_CONCURRENT = 10
+    
+    PLUGIN_NAME = "astrbot_plugin_youtube_nova"
+    CACHE_DIR_NAME = "cache"
+    RUNTIME_DIR_NAME = "runtime_manager"
+    DEFAULT_CACHE_DIR = "/app/sharedFolder/youtube_nova/cache"
+
+    @staticmethod
+    def build_cache_dir(prefix: str) -> str:
+        """基于运行环境前缀生成统一的媒体缓存目录。"""
+        return os.path.abspath(os.path.join(prefix, Config.CACHE_DIR_NAME))
+
+    @staticmethod
+    def build_runtime_dir(cache_dir: str, *parts: str) -> str:
+        """基于媒体缓存目录生成统一的运行时文件目录。"""
+        return os.path.abspath(
+            os.path.join(cache_dir, Config.RUNTIME_DIR_NAME, *parts)
+        )

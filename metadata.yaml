@@ -1,0 +1,17 @@
+name: astrbot_plugin_youtube_nova
+display_name: "YouTube Nova"
+short_desc: YouTube 视频解析、取流、卡片、热评与 Cookie 维护
+desc: |
+  独立的 YouTube 媒体解析插件。支持 Innertube 与 yt-dlp 双取流、
+  DASH 合并、PO Token、登录 Cookie 自动轮换、热评与头像、卡片渲染、
+  翻译、体积预算和超限压缩。
+version: v1.0.0
+astrbot_version: ">=4.25.0"
+author: Whereis-Alice
+repo: https://github.com/Whereis-Alice/astrbot_plugin_youtube_nova
+social_link: https://github.com/Whereis-Alice
+tags:
+  - YouTube
+  - 视频解析
+  - yt-dlp
+  - 卡片渲染
