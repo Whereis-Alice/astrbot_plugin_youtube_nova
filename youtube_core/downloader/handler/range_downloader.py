@@ -6,7 +6,7 @@ import aiohttp
 
 from ...logger import logger
 from ...constants import Config
-from ..utils import generate_cache_file_path
+from ..utils import format_url_for_log, generate_cache_file_path
 from ..budget import ByteBudget, resolve_max_bytes
 from .base import range_download_file
 
@@ -49,13 +49,19 @@ async def download_video_with_range_to_cache(
             budget=budget,
         )
     except Exception as e:
-        logger.warning(f"Range下载异常，降级为normal_video: {video_url}, 错误: {e}")
+        logger.warning(
+            "Range下载异常，降级为normal_video: "
+            f"{format_url_for_log(video_url)}, 错误: {e}"
+        )
         result = None
 
     if result:
         return result
 
-    logger.debug(f"Range下载不可用，降级为normal_video: {video_url}")
+    logger.debug(
+        "Range下载不可用，降级为normal_video: "
+        f"{format_url_for_log(video_url)}"
+    )
     from .normal_video import download_video_to_cache as normal_download
 
     return await normal_download(

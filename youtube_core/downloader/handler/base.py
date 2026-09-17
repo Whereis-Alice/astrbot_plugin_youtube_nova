@@ -11,7 +11,7 @@ import aiohttp
 from ...logger import logger
 
 from ...storage import cleanup_file, stamp_subdir
-from ..utils import extract_size_from_headers
+from ..utils import extract_size_from_headers, format_url_for_log
 from ..validator import validate_media_response
 from ..budget import ByteBudget, DownloadLimitExceeded, resolve_max_bytes
 from ..fileio import run_blocking
@@ -80,7 +80,8 @@ async def _get_file_size(
             # 200 表示服务端忽略 Range。绝不能读取正文或启动并发分片。
             if response.status != 206:
                 logger.debug(
-                    f"Range探测未返回206，跳过Range模式: {url}, "
+                    "Range探测未返回206，跳过Range模式: "
+                    f"{format_url_for_log(url)}, "
                     f"status={response.status}"
                 )
                 return None
@@ -92,7 +93,7 @@ async def _get_file_size(
                 return None
             return total
     except Exception as e:
-        logger.debug(f"获取文件大小失败: {url}, 错误: {e}")
+        logger.debug(f"获取文件大小失败: {format_url_for_log(url)}, 错误: {e}")
 
     return None
 
@@ -201,8 +202,8 @@ async def range_download_file(
     output_path: str,
     headers: dict = None,
     proxy: str = None,
-    chunk_size: int = Config.RANGE_DOWNLOAD_CHUNK_SIZE,
-    max_concurrent: int = Config.RANGE_DOWNLOAD_MAX_CONCURRENT,
+    chunk_size: Optional[int] = None,
+    max_concurrent: Optional[int] = None,
     max_bytes: Optional[int] = None,
     budget: Optional[ByteBudget] = None,
 ) -> Optional[Dict[str, Any]]:
@@ -210,33 +211,34 @@ async def range_download_file(
     if not output_path:
         return None
     try:
-        chunk_size = max(64 * 1024, int(chunk_size))
-        max_concurrent = min(16, max(1, int(max_concurrent)))
+        chunk_size = max(
+            64 * 1024,
+            int(chunk_size or Config.RANGE_DOWNLOAD_CHUNK_SIZE),
+        )
+        max_concurrent = min(
+            8,
+            max(1, int(max_concurrent or Config.RANGE_DOWNLOAD_MAX_CONCURRENT)),
+        )
     except (TypeError, ValueError):
         chunk_size = Config.RANGE_DOWNLOAD_CHUNK_SIZE
         max_concurrent = min(16, Config.RANGE_DOWNLOAD_MAX_CONCURRENT)
 
     file_size = await _get_file_size(session, url, headers, proxy)
     if file_size is None:
-        logger.debug(f"Range下载无法获取文件大小: {url}")
+        logger.debug(f"Range下载无法获取文件大小: {format_url_for_log(url)}")
         return None
 
     active_budget = budget or ByteBudget(resolve_max_bytes(max_bytes, is_video=True))
     try:
         await active_budget.consume(file_size)
     except DownloadLimitExceeded as e:
-        logger.warning(f"Range下载已拒绝: {url}, 错误: {e}")
+        logger.warning(f"Range下载已拒绝: {format_url_for_log(url)}, 错误: {e}")
         return None
     budget_reserved = file_size
 
     num_chunks = (file_size + chunk_size - 1) // chunk_size
-    if num_chunks <= 1:
-        logger.debug(f"Range下载文件分片数不足，跳过Range模式: {url}, size={file_size}")
-        await active_budget.release(budget_reserved)
-        return None
-
     logger.debug(
-        f"开始Range下载: {url}, "
+        f"开始Range下载: {format_url_for_log(url)}, "
         f"size={file_size}, chunks={num_chunks}, concurrent={max_concurrent}"
     )
 
@@ -302,7 +304,9 @@ async def range_download_file(
             if not task.done():
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        logger.warning(f"Range下载写入流程失败: {url}, 错误: {e}")
+        logger.warning(
+            f"Range下载写入流程失败: {format_url_for_log(url)}, 错误: {e}"
+        )
         cleanup_file(temp_path)
         await active_budget.release(budget_reserved)
         return None
@@ -327,7 +331,7 @@ async def range_download_file(
     if failed_chunks:
         logger.warning(
             f"部分chunks下载失败 ({len(failed_chunks)}/{num_chunks})，"
-            f"放弃Range结果: {url}"
+            f"放弃Range结果: {format_url_for_log(url)}"
         )
         cleanup_file(temp_path)
         await active_budget.release(budget_reserved)
@@ -343,7 +347,8 @@ async def range_download_file(
 
     if actual_size != file_size:
         logger.warning(
-            f"Range下载文件大小异常: {url}, expected={file_size}, actual={actual_size}"
+            "Range下载文件大小异常: "
+            f"{format_url_for_log(url)}, expected={file_size}, actual={actual_size}"
         )
         cleanup_file(temp_path)
         await active_budget.release(budget_reserved)
@@ -362,8 +367,15 @@ async def range_download_file(
         return None
 
     size_mb = actual_size / (1024 * 1024)
-    logger.debug(f"Range下载完成: {url}, file={output_path}, size={size_mb:.2f}MB")
-    return {"file_path": os.path.normpath(output_path), "size_mb": size_mb}
+    logger.debug(
+        "Range下载完成: "
+        f"{format_url_for_log(url)}, file={output_path}, size={size_mb:.2f}MB"
+    )
+    return {
+        "file_path": os.path.normpath(output_path),
+        "size_mb": size_mb,
+        "status_code": 206,
+    }
 
 
 async def download_media_stream(
@@ -535,12 +547,14 @@ async def download_media_from_url(
             if attempt < attempts and _is_retryable_exception(e):
                 logger.debug(
                     f"下载媒体失败，将重试({attempt}/{attempts}): "
-                    f"{media_url}, 错误: {_format_download_error(e)}"
+                    f"{format_url_for_log(media_url)}, "
+                    f"错误: {_format_download_error(e)}"
                 )
                 await _sleep_before_retry(attempt)
                 continue
             logger.warning(
-                f"下载媒体失败: {media_url}, 错误: {_format_download_error(e)}"
+                f"下载媒体失败: {format_url_for_log(media_url)}, "
+                f"错误: {_format_download_error(e)}"
             )
             break
     if last_error:

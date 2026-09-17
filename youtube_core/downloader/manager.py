@@ -17,7 +17,11 @@ from ..storage import cleanup_directory, cleanup_file
 from .fileio import gather_cancel_on_error, run_blocking
 from .router import download_media
 from .transcode import transcode_video_to_size
-from .utils import check_cache_dir_available, strip_media_prefixes
+from .utils import (
+    check_cache_dir_available,
+    format_url_for_log,
+    strip_media_prefixes,
+)
 from .validator import get_video_size, validate_media_url
 from .handler.video_cover import extract_video_cover_to_cache
 
@@ -571,7 +575,10 @@ class DownloadManager:
                     except asyncio.CancelledError:
                         raise
                     except Exception as e:
-                        logger.warning(f"截取视频封面异常: {url_list[0]}, 错误: {e}")
+                        logger.warning(
+                            "截取视频封面异常: "
+                            f"{format_url_for_log(url_list[0])}, 错误: {e}"
+                        )
                         return {
                             **item,
                             "url": url_list[0],
@@ -626,7 +633,10 @@ class DownloadManager:
                             self._extract_status_code_from_error(last_error)
                             or last_status_code
                         )
-                        logger.warning(f"下载媒体失败: {candidate}, 错误: {e}")
+                        logger.warning(
+                            f"下载媒体失败: {format_url_for_log(candidate)}, "
+                            f"错误: {e}"
+                        )
 
                 return {
                     **item,

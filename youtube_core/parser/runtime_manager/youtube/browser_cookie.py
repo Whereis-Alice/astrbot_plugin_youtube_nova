@@ -258,10 +258,14 @@ class BrowserCookieSource:
         return ""
 
     def _display(self) -> str:
-        if self.spec.display:
-            return self.spec.display
-        if os.environ.get("DISPLAY"):
-            return str(os.environ["DISPLAY"])
+        configured = self.spec.display or str(os.environ.get("DISPLAY") or "")
+        if configured:
+            configured = configured.strip()
+            # WebUI 中常被填成 10.0；X11 实际要求 :10.0。主机名形式
+            # localhost:10.0 与已带冒号的写法保持原样。
+            if re.fullmatch(r"\d+(?:\.\d+)?", configured):
+                configured = f":{configured}"
+            return configured
         sockets = sorted(Path("/tmp/.X11-unix").glob("X*"))
         if sockets:
             suffix = sockets[0].name[1:]

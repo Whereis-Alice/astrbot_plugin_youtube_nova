@@ -6,6 +6,32 @@ import unittest
 
 from youtube_core.constants import Config
 from youtube_core.downloader.manager import DownloadManager
+from youtube_core.downloader.utils import format_url_for_log
+
+
+class DownloadLogSafetyTests(unittest.TestCase):
+    def test_signed_query_is_redacted(self):
+        url = (
+            "https://rr2---sn.example.googlevideo.com/videoplayback"
+            "?clen=123&sig=secret-signature&pot=secret-token"
+        )
+
+        rendered = format_url_for_log(url)
+
+        self.assertEqual(
+            rendered,
+            "https://rr2---sn.example.googlevideo.com/videoplayback?<redacted>",
+        )
+        self.assertNotIn("secret", rendered)
+
+    def test_userinfo_and_long_paths_are_not_logged_verbatim(self):
+        url = "https://user:password@example.com/" + "x" * 300
+
+        rendered = format_url_for_log(url, max_length=80)
+
+        self.assertNotIn("user", rendered)
+        self.assertNotIn("password", rendered)
+        self.assertLessEqual(len(rendered), 80)
 
 
 class SizeCapNormalizationTests(unittest.TestCase):

@@ -172,6 +172,18 @@ def test_browser_wakeup_preserves_an_existing_profile_process() -> None:
     spawn.assert_not_called()
 
 
+def test_browser_display_normalizes_webui_numeric_value() -> None:
+    numeric = BrowserCookieSource(
+        BrowserCookieSpec(browser="chromium", display="10.0")
+    )
+    canonical = BrowserCookieSource(
+        BrowserCookieSpec(browser="chromium", display=":10.0")
+    )
+
+    assert numeric._display() == ":10.0"
+    assert canonical._display() == ":10.0"
+
+
 def test_config_browser_mode_ignores_manual_cookie_and_wires_profile() -> None:
     config = ConfigManager(
         {

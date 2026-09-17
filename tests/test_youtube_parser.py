@@ -3172,6 +3172,164 @@ class StreamSourcePlanTest(unittest.TestCase):
         self.assertEqual(parser._plan_stream_source(), "innertube")
 
 
+class _TailProbeResponse:
+    def __init__(self, status):
+        self.status = status
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+
+class _TailProbeSession:
+    def __init__(self, statuses):
+        self.statuses = dict(statuses)
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return _TailProbeResponse(self.statuses[url])
+
+
+class InnertubeTailProbeTest(unittest.TestCase):
+    """在真正下载前识别只能读取前半段的 Googlevideo 直链。"""
+
+    @staticmethod
+    def _url(name, length=100):
+        return f"https://r1---sn.example.googlevideo.com/{name}?clen={length}"
+
+    @staticmethod
+    def _run(parser, session, media_url):
+        return asyncio.run(
+            parser._probe_media_tail(
+                session,
+                media_url,
+                {"User-Agent": "test-client"},
+                _Deadline(20),
+            )
+        )
+
+    def test_single_stream_tail_206_is_usable(self):
+        url = self._url("progressive", 321)
+        session = _TailProbeSession({url: 206})
+
+        ok, detail = self._run(YouTubeParser(), session, url)
+
+        self.assertIs(ok, True)
+        self.assertEqual(detail, "media=HTTP 206")
+        self.assertEqual(
+            session.calls[0][1]["headers"]["Range"],
+            "bytes=320-320",
+        )
+
+    def test_dash_checks_video_and_audio_tails(self):
+        video = self._url("video", 800)
+        audio = self._url("audio", 120)
+        session = _TailProbeSession({video: 206, audio: 206})
+
+        ok, detail = self._run(
+            YouTubeParser(), session, f"dash:{video}||{audio}"
+        )
+
+        self.assertIs(ok, True)
+        self.assertEqual(detail, "video=HTTP 206, audio=HTTP 206")
+        ranges = {call[1]["headers"]["Range"] for call in session.calls}
+        self.assertEqual(ranges, {"bytes=799-799", "bytes=119-119"})
+
+    def test_any_dash_tail_403_rejects_the_innertube_pair(self):
+        video = self._url("video", 800)
+        audio = self._url("audio", 120)
+        session = _TailProbeSession({video: 206, audio: 403})
+
+        ok, detail = self._run(
+            YouTubeParser(), session, f"dash:{video}||{audio}"
+        )
+
+        self.assertIs(ok, False)
+        self.assertIn("video=HTTP 206", detail)
+        self.assertIn("audio=HTTP 403", detail)
+
+    def test_missing_clen_is_inconclusive_without_network_request(self):
+        url = "https://r1---sn.example.googlevideo.com/video"
+        session = _TailProbeSession({})
+
+        ok, detail = self._run(YouTubeParser(), session, url)
+
+        self.assertIsNone(ok)
+        self.assertEqual(detail, "media=缺少clen")
+        self.assertEqual(session.calls, [])
+
+    def test_rejected_innertube_tail_hands_streaming_to_ytdlp(self):
+        parser = YouTubeParser()
+        innertube_url = self._url("innertube", 800)
+        ytdlp_video = self._url("ytdlp-video", 700)
+        ytdlp_audio = self._url("ytdlp-audio", 100)
+        player = {
+            "videoDetails": {
+                "title": "完整性回退测试",
+                "author": "Nova",
+                "lengthSeconds": "60",
+            },
+            "playabilityStatus": {"status": "OK"},
+        }
+        fallback = YtDlpStream(
+            url=f"dash:{ytdlp_video}||{ytdlp_audio}",
+            kind="dash",
+            height=1080,
+            user_agent="yt-dlp-agent",
+            filesize=800,
+            detail="137/1080p/mp4+140/m4a",
+        )
+
+        with (
+            mock.patch.object(
+                parser,
+                "_fetch_oembed",
+                new=mock.AsyncMock(return_value={"title": "完整性回退测试"}),
+            ),
+            mock.patch.object(
+                parser,
+                "_fetch_player",
+                new=mock.AsyncMock(return_value=(player, "ios")),
+            ),
+            mock.patch.object(
+                parser,
+                "_fetch_next",
+                new=mock.AsyncMock(return_value={}),
+            ),
+            mock.patch.object(
+                parser,
+                "_probe_media_tail",
+                new=mock.AsyncMock(return_value=(False, "video=HTTP 403")),
+            ),
+            mock.patch.object(
+                parser,
+                "_resolve_with_ytdlp",
+                new=mock.AsyncMock(return_value=(fallback, {})),
+            ) as resolve_ytdlp,
+            mock.patch.object(
+                youtube_platform,
+                "select_youtube_media_detailed",
+                return_value=(innertube_url, "progressive", 720, 800),
+            ),
+        ):
+            metadata = asyncio.run(
+                parser._parse(object(), f"https://youtu.be/{VID}")
+            )
+
+        resolve_ytdlp.assert_awaited_once_with(VID)
+        self.assertEqual(metadata["youtube_stream_source"], "ytdlp")
+        self.assertEqual(metadata["youtube_stream_kind"], "dash")
+        self.assertEqual(
+            metadata["video_urls"],
+            [[f"dash:range:{ytdlp_video}||range:{ytdlp_audio}"]],
+        )
+        self.assertEqual(metadata["video_headers"]["User-Agent"], "yt-dlp-agent")
+        self.assertIsNone(parser.consume_cookie_alert())
+
+
 class YtDlpInfoSummaryTest(unittest.TestCase):
     """yt-dlp info 的元数据收敛：只回填读到的字段，空值一律省略。"""
 

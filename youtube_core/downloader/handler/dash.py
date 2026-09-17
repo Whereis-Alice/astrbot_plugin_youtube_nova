@@ -11,6 +11,7 @@ from ...constants import Config
 from ...storage import cleanup_file, stamp_subdir
 from ..budget import ByteBudget, resolve_max_bytes
 from ..fileio import gather_cancel_on_error, run_blocking
+from ..utils import format_url_for_log
 from .base import download_media_from_url
 
 
@@ -91,10 +92,14 @@ async def _download_stream(
             )
             if range_result:
                 return range_result
-            logger.debug(f"DASH子流Range下载失败，降级普通下载: {actual_url}")
+            logger.debug(
+                "DASH子流Range下载失败，降级普通下载: "
+                f"{format_url_for_log(actual_url)}"
+            )
         except Exception as e:
             logger.warning(
-                f"DASH子流Range下载异常，降级普通下载: {actual_url}, 错误: {e}"
+                "DASH子流Range下载异常，降级普通下载: "
+                f"{format_url_for_log(actual_url)}, 错误: {e}"
             )
 
     return await _download_stream_normal(
@@ -218,7 +223,7 @@ async def download_dash_to_cache(
         return None
 
     logger.debug(
-        f"开始DASH下载: video={video_url[:60]}..., "
+        f"开始DASH下载: video={format_url_for_log(video_url)}, "
         f"audio={'有' if audio_url else '无'}, index={index}"
     )
 
@@ -357,7 +362,9 @@ async def download_dash_to_cache(
         cleanup_file(output_path)
         raise
     except Exception as e:
-        logger.warning(f"DASH 下载失败: video={video_url}, 错误: {e}")
+        logger.warning(
+            f"DASH 下载失败: video={format_url_for_log(video_url)}, 错误: {e}"
+        )
         cleanup_file(video_temp_path)
         cleanup_file(audio_temp_path)
         cleanup_file(output_path)

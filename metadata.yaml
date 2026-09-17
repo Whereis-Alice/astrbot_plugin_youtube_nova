@@ -5,7 +5,7 @@ desc: |
   独立的 YouTube 媒体解析插件。支持 Innertube 与 yt-dlp 双取流、
   DASH 合并、PO Token、登录 Cookie 自动轮换、热评与头像、卡片渲染、
   翻译、体积预算和超限压缩。
-version: v1.1.0
+version: v1.1.1
 astrbot_version: ">=4.25.0"
 author: Whereis-Alice
 repo: https://github.com/Whereis-Alice/astrbot_plugin_youtube_nova

@@ -6,7 +6,7 @@ import aiohttp
 
 from ...logger import logger
 
-from ..utils import generate_cache_file_path
+from ..utils import format_url_for_log, generate_cache_file_path
 from .base import download_media_from_url
 
 
@@ -38,7 +38,10 @@ async def download_video_to_cache(
     if not cache_dir:
         return None
 
-    logger.debug(f"开始下载视频: {video_url}, media_id={media_id}, index={index}")
+    logger.debug(
+        f"开始下载视频: {format_url_for_log(video_url)}, "
+        f"media_id={media_id}, index={index}"
+    )
 
     def file_path_generator(content_type: str, url: str) -> str:
         return generate_cache_file_path(
@@ -62,9 +65,12 @@ async def download_video_to_cache(
     )
 
     if file_path:
-        logger.debug(f"视频下载完成: {video_url} -> {file_path}, {size_mb}MB")
+        logger.debug(
+            f"视频下载完成: {format_url_for_log(video_url)} -> "
+            f"{file_path}, {size_mb}MB"
+        )
         return {"file_path": file_path, "size_mb": size_mb, "status_code": status_code}
-    logger.debug(f"视频下载失败: {video_url}")
+    logger.debug(f"视频下载失败: {format_url_for_log(video_url)}")
     return {
         "file_path": None,
         "size_mb": None,

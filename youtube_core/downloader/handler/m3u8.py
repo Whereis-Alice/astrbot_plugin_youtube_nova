@@ -24,6 +24,7 @@ from ..budget import (
 )
 from ..security import safe_request
 from ..fileio import gather_cancel_on_error, run_blocking
+from ..utils import format_url_for_log
 from .base import (
     _format_download_error,
     _is_retryable_exception,
@@ -275,7 +276,9 @@ class M3U8Handler:
                     await _sleep_before_retry(attempt)
                     continue
                 error_text = _format_download_error(e)
-                logger.warning(f"下载文件失败 {url}: {error_text}")
+                logger.warning(
+                    f"下载文件失败 {format_url_for_log(url)}: {error_text}"
+                )
                 raise M3U8DownloadError(
                     error_text, _status_code_from_exception(e)
                 ) from e

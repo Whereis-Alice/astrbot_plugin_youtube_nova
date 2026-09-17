@@ -26,7 +26,9 @@ class Config:
     STREAM_DOWNLOAD_CHUNK_SIZE = 2 * 1024 * 1024
     
     RANGE_DOWNLOAD_CHUNK_SIZE = 2 * 1024 * 1024
-    RANGE_DOWNLOAD_MAX_CONCURRENT = 64
+    # Googlevideo 会对同一直链的高并发 Range 请求返回 403。四路在机房出口上
+    # 更稳定，吞吐仍足够覆盖聊天场景中的几十 MB 视频。
+    RANGE_DOWNLOAD_MAX_CONCURRENT = 4
     
     M3U8_MAX_CONCURRENT_SEGMENTS = 10
     

@@ -11,6 +11,7 @@ from .utils import (
     validate_content_type,
     check_json_error_response,
     extract_size_from_headers,
+    format_url_for_log,
     strip_media_prefixes,
 )
 from ..constants import Config
@@ -76,14 +77,18 @@ def _is_obvious_non_media_preview(content_preview: bytes, media_url: str) -> boo
     stripped = content_preview.lstrip(b"\xef\xbb\xbf\r\n\t ")
     lowered = stripped[:128].lower()
     if stripped.startswith((b"{", b"[")):
-        logger.warning(f"媒体URL包含JSON响应（非媒体内容）: {media_url}")
+        logger.warning(
+            f"媒体URL包含JSON响应（非媒体内容）: {format_url_for_log(media_url)}"
+        )
         return True
 
     if (
         lowered.startswith((b"<!doctype", b"<html", b"<body", b"<?xml", b"<"))
         or b"<html" in lowered
     ):
-        logger.warning(f"媒体URL包含HTML响应（非媒体内容）: {media_url}")
+        logger.warning(
+            f"媒体URL包含HTML响应（非媒体内容）: {format_url_for_log(media_url)}"
+        )
         return True
 
     text_like = all(byte in b"\r\n\t" or 32 <= byte <= 126 for byte in stripped)
@@ -100,7 +105,10 @@ def _is_obvious_non_media_preview(content_preview: bytes, media_url: str) -> boo
             b"unauthorized",
         )
     ):
-        logger.warning(f"媒体URL包含文本错误响应（非媒体内容）: {media_url}")
+        logger.warning(
+            "媒体URL包含文本错误响应（非媒体内容）: "
+            f"{format_url_for_log(media_url)}"
+        )
         return True
 
     return False
@@ -126,19 +134,26 @@ async def validate_media_response(
     """
     if response.status not in (200, 206):
         if response.status == 403:
-            logger.warning(f"媒体URL访问被拒绝(403 Forbidden): {media_url}")
+            logger.warning(
+                "媒体URL访问被拒绝(403 Forbidden): "
+                f"{format_url_for_log(media_url)}"
+            )
         return False, None
 
     content_type = response.headers.get("Content-Type", "").lower()
 
     if "application/json" in content_type or "text/" in content_type:
-        logger.warning(f"媒体URL包含错误响应（非媒体Content-Type）: {media_url}")
+        logger.warning(
+            "媒体URL包含错误响应（非媒体Content-Type）: "
+            f"{format_url_for_log(media_url)}"
+        )
         return False, None
 
     if not is_video:
         if not is_supported_image_content_type(content_type):
             logger.warning(
-                f"图片URL返回了不支持的Content-Type: {media_url}, "
+                "图片URL返回了不支持的Content-Type: "
+                f"{format_url_for_log(media_url)}, "
                 f"content_type={content_type or '<empty>'}"
             )
             return False, None
@@ -151,13 +166,17 @@ async def validate_media_response(
         content_preview = await response.content.read(_CONTENT_PREVIEW_CHECK_SIZE)
         actual_format = detect_supported_image_format(content_preview)
         if not actual_format:
-            logger.warning(f"图片URL内容不是受支持的栅格格式: {media_url}")
+            logger.warning(
+                "图片URL内容不是受支持的栅格格式: "
+                f"{format_url_for_log(media_url)}"
+            )
             return False, None
 
         declared_format = image_format_from_content_type(content_type)
         if declared_format and declared_format != actual_format:
             logger.warning(
-                f"图片Content-Type与文件签名不一致: {media_url}, "
+                "图片Content-Type与文件签名不一致: "
+                f"{format_url_for_log(media_url)}, "
                 f"declared={declared_format}, actual={actual_format}"
             )
         return True, content_preview
@@ -216,7 +235,7 @@ async def get_video_size(
     """
     video_url = strip_media_prefixes(video_url)
 
-    logger.debug(f"检查视频大小: {video_url}")
+    logger.debug(f"检查视频大小: {format_url_for_log(video_url)}")
     try:
         request_headers = headers or {}
         timeout = aiohttp.ClientTimeout(total=Config.VIDEO_SIZE_CHECK_TIMEOUT)
@@ -242,7 +261,10 @@ async def get_video_size(
                     return None, response.status
                 size = extract_size_from_headers(response)
                 if size is not None:
-                    logger.debug(f"视频大小(HEAD): {size:.2f}MB, {video_url}")
+                    logger.debug(
+                        f"视频大小(HEAD): {size:.2f}MB, "
+                        f"{format_url_for_log(video_url)}"
+                    )
                     return size, response.status
                 return size, response.status
         except (aiohttp.ClientError, asyncio.TimeoutError):
@@ -257,7 +279,10 @@ async def get_video_size(
             )
             async with response:
                 if response.status == 403:
-                    logger.warning(f"视频URL访问被拒绝(403 Forbidden): {video_url}")
+                    logger.warning(
+                        "视频URL访问被拒绝(403 Forbidden): "
+                        f"{format_url_for_log(video_url)}"
+                    )
                     return None, 403
                 if response.status >= 400:
                     return None, response.status
@@ -298,7 +323,9 @@ async def validate_media_url(
     """
     media_url = strip_media_prefixes(media_url)
 
-    logger.debug(f"验证媒体URL: {media_url}, is_video={is_video}")
+    logger.debug(
+        f"验证媒体URL: {format_url_for_log(media_url)}, is_video={is_video}"
+    )
     try:
         request_headers = headers or {}
         timeout = aiohttp.ClientTimeout(total=Config.VIDEO_SIZE_CHECK_TIMEOUT)
@@ -320,7 +347,9 @@ async def validate_media_url(
                 is_valid, _ = await validate_media_response(
                     response, media_url, is_video, allow_read_content=False
                 )
-                logger.debug(f"媒体验证: valid={is_valid}, {media_url}")
+                logger.debug(
+                    f"媒体验证: valid={is_valid}, {format_url_for_log(media_url)}"
+                )
                 return is_valid, response.status
         except (aiohttp.ClientError, asyncio.TimeoutError):
             get_headers = _with_range_header(request_headers)

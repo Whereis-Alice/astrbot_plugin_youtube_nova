@@ -10,6 +10,35 @@ from ..storage import stamp_subdir
 from .image_format import infer_image_suffix, is_supported_image_content_type
 
 
+def format_url_for_log(url: str, max_length: int = 180) -> str:
+    """返回适合日志展示、且不含查询凭据的短 URL。"""
+    text = str(url or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = urlsplit(text)
+        if parsed.scheme in {"http", "https"} and parsed.hostname:
+            hostname = parsed.hostname
+            if ":" in hostname and not hostname.startswith("["):
+                hostname = f"[{hostname}]"
+            netloc = hostname
+            if parsed.port is not None:
+                netloc += f":{parsed.port}"
+            text = f"{parsed.scheme}://{netloc}{parsed.path or '/'}"
+            if parsed.query:
+                text += "?<redacted>"
+        elif "?" in text:
+            text = text.split("?", 1)[0] + "?<redacted>"
+    except (TypeError, ValueError):
+        # 即使 URL 本身畸形，也不能把 userinfo 或查询凭据原样写入日志。
+        text = re.sub(r"(?i)(https?://)[^/@]+@", r"\1", text)
+        if "?" in text:
+            text = text.split("?", 1)[0] + "?<redacted>"
+
+    limit = max(32, int(max_length or 180))
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
 def validate_content_type(content_type: str, is_video: bool = False) -> bool:
     """验证Content-Type是否为有效的媒体类型
 
@@ -56,7 +85,10 @@ def check_json_error_response(content_preview: bytes, media_url: str) -> bool:
             "error_code" in content_preview_str
             or "error_response" in content_preview_str
         ):
-            logger.warning(f"媒体URL包含错误响应（Content-Type为空）: {media_url}")
+            logger.warning(
+                "媒体URL包含错误响应（Content-Type为空）: "
+                f"{format_url_for_log(media_url)}"
+            )
             return True
     except UnicodeDecodeError:
         pass

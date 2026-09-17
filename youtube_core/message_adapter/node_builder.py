@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from astrbot.api.message_components import Image, Plain, Video
 
-from ..downloader.utils import strip_media_prefixes
+from ..downloader.utils import format_url_for_log, strip_media_prefixes
 from ..parser.utils import format_duration_ms
 from ..logger import logger
 from ..message_text import split_message_text
@@ -416,7 +416,10 @@ def build_media_nodes(
             try:
                 nodes.append(Video.fromURL(actual_video_url))
             except Exception as e:
-                logger.warning(f"构建视频节点失败: {actual_video_url}, 错误: {e}")
+                logger.warning(
+                    "构建视频节点失败: "
+                    f"{format_url_for_log(actual_video_url)}, 错误: {e}"
+                )
                 _mark_media_failure(metadata, "video", idx, f"构建视频URL节点失败: {e}")
 
         file_idx += 1
@@ -473,7 +476,9 @@ def build_media_nodes(
             try:
                 nodes.append(Image.fromURL(image_url))
             except Exception as e:
-                logger.warning(f"构建图片节点失败: {image_url}, 错误: {e}")
+                logger.warning(
+                    f"构建图片节点失败: {format_url_for_log(image_url)}, 错误: {e}"
+                )
                 _mark_media_failure(
                     metadata, "image", image_idx, f"构建图片URL节点失败: {e}"
                 )

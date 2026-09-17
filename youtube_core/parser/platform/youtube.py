@@ -2178,6 +2178,106 @@ class YouTubeParser(BaseVideoParser):
             session, "next", "web", body, deadline
         )
 
+    @staticmethod
+    def _tail_probe_streams(media_url: str) -> List[Tuple[str, str]]:
+        """拆出需要验证完整性的直连子流。"""
+        value = str(media_url or "").strip()
+        if not value or value.startswith("m3u8:"):
+            return []
+        if value.startswith("dash:"):
+            parts = value[5:].split("||", 1)
+            labels = ("video", "audio")
+        else:
+            parts = [value]
+            labels = ("media",)
+
+        streams: List[Tuple[str, str]] = []
+        for label, stream_url in zip(labels, parts):
+            stream_url = stream_url.strip()
+            if stream_url.startswith("range:"):
+                stream_url = stream_url[6:]
+            if stream_url.startswith(("http://", "https://")):
+                streams.append((label, stream_url))
+        return streams
+
+    @staticmethod
+    def _declared_stream_length(stream_url: str) -> int:
+        """从 Googlevideo 直链的 ``clen`` 参数读取声明长度。"""
+        try:
+            values = parse_qs(urlparse(stream_url).query).get("clen") or ()
+            return _as_int(values[0]) if values else 0
+        except (TypeError, ValueError):
+            return 0
+
+    async def _probe_media_tail(
+        self,
+        session: aiohttp.ClientSession,
+        media_url: str,
+        headers: Dict[str, str],
+        deadline: _Deadline,
+    ) -> Tuple[Optional[bool], str]:
+        """验证所选直链的尾字节能否取到。
+
+        YouTube 偶尔会给 iOS Innertube 客户端一条看似正常、实际只允许读取
+        前半段的 DASH URL。首字节与文件大小探测都会成功，真正下载到尾段才
+        403。这里按 URL 自带的 ``clen`` 请求最后一个字节，在下载前识别这种
+        半截直链。只有明确的 4xx 才判失败；缺少长度、超时或 5xx 均保持原链
+        路，避免临时网络抖动无谓拉起 yt-dlp。
+        """
+        streams = self._tail_probe_streams(media_url)
+        if not streams:
+            return None, "没有可预检的直连子流"
+
+        targets: List[Tuple[str, str, int]] = []
+        skipped: List[str] = []
+        for label, stream_url in streams:
+            length = self._declared_stream_length(stream_url)
+            if length <= 0:
+                skipped.append(f"{label}=缺少clen")
+                continue
+            targets.append((label, stream_url, length))
+        if not targets:
+            return None, ", ".join(skipped)
+        if deadline.expired():
+            return None, "解析预算不足，跳过尾段预检"
+
+        async def probe_one(
+            label: str,
+            stream_url: str,
+            length: int,
+        ) -> Tuple[str, Optional[bool], str]:
+            request_headers = dict(headers or {})
+            request_headers["Range"] = f"bytes={length - 1}-{length - 1}"
+            try:
+                async with session.get(
+                    stream_url,
+                    headers=request_headers,
+                    proxy=self.proxy,
+                    timeout=aiohttp.ClientTimeout(total=deadline.timeout(6.0)),
+                ) as response:
+                    status = int(response.status)
+                    if status in {200, 206}:
+                        return label, True, f"HTTP {status}"
+                    if 400 <= status < 500:
+                        return label, False, f"HTTP {status}"
+                    return label, None, f"HTTP {status}"
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # aiohttp 异常文本常包含整条签名 URL，诊断只保留异常类型。
+                return label, None, type(exc).__name__
+
+        results = await asyncio.gather(
+            *(probe_one(*target) for target in targets)
+        )
+        details = [f"{label}={detail}" for label, _ok, detail in results]
+        details.extend(skipped)
+        if any(ok is False for _label, ok, _detail in results):
+            return False, ", ".join(details)
+        if skipped or any(ok is None for _label, ok, _detail in results):
+            return None, ", ".join(details)
+        return True, ", ".join(details)
+
     # ── 解析主流程 ────────────────────────────────────────
 
     async def parse(
@@ -2441,8 +2541,6 @@ class YouTubeParser(BaseVideoParser):
                 allow_dash=self.allow_dash,
                 max_bytes=self.stream_max_bytes,
             )
-        innertube_stream_ok = bool(media_url)
-
         covers = thumbnail_candidates(video_id)
         oembed_cover = oembed.get("thumbnail_url")
         if isinstance(oembed_cover, str) and oembed_cover.startswith("http"):
@@ -2465,6 +2563,32 @@ class YouTubeParser(BaseVideoParser):
             referer="https://www.youtube.com/",
             user_agent=_WEB_USER_AGENT,
         )
+
+        if media_url and stream_from_innertube:
+            tail_ok, tail_detail = await self._probe_media_tail(
+                session,
+                media_url,
+                video_headers,
+                deadline,
+            )
+            if tail_ok is False:
+                failures.append(
+                    f"{player_client or 'innertube'}_tail_probe -> {tail_detail}"
+                )
+                logger.info(
+                    "[youtube] Innertube 直链尾段不可用，自动切换 yt-dlp: "
+                    f"video_id={video_id}; {tail_detail}"
+                )
+                media_url = ""
+                media_kind = ""
+                media_height = 0
+                media_size_bytes = 0
+            elif tail_ok is None:
+                logger.debug(
+                    "[youtube] Innertube 直链尾段预检无结论，保留原流: "
+                    f"video_id={video_id}; {tail_detail}"
+                )
+        innertube_stream_ok = bool(media_url)
 
         author = str(details.get("author") or "") or str(
             oembed.get("author_name") or ""
@@ -2615,7 +2739,14 @@ class YouTubeParser(BaseVideoParser):
             else:
                 limit_warnings.append("未取到可下载的视频流，仅展示封面与信息")
 
-        video_urls: List[List[str]] = [[media_url]] if media_url else []
+        # Googlevideo 的部分新直链会拒绝不带 Range 的完整 GET（403），但相同
+        # URL 的字节范围请求正常返回 206。下载器已有可靠的 Range + 普通回退，
+        # 这里为 YouTube 直链显式选择该路由；DASH 的音视频子流会分别加前缀。
+        video_urls: List[List[str]] = (
+            self._add_range_prefix_to_video_urls([[media_url]])
+            if media_url
+            else []
+        )
         image_urls: List[List[str]] = [] if media_url else [list(covers)]
         video_cover_urls: List[List[str]] = (
             [list(covers)] if media_url else []
