@@ -44,7 +44,7 @@ from .youtube_core.translation import MetadataTranslator, build_card_metadata_li
     "astrbot_plugin_youtube_nova",
     "Whereis-Alice",
     "YouTube Nova - YouTube 视频、卡片、翻译与热评解析",
-    "1.1.1",
+    "1.2.0",
 )
 class YouTubeNovaPlugin(Star):
     # Google 侧的登录凭据大约每 10 分钟就会换一茬。轮换请求本身极轻（一个
@@ -74,11 +74,30 @@ class YouTubeNovaPlugin(Star):
             cache_dir_available=cfg.download.cache_dir_available,
             max_concurrent_downloads=cfg.download.max_concurrent_downloads,
             video_cover_only=cfg.message.media_display.video_cover_only,
+            oversize_delivery=cfg.download.oversize_delivery,
             transcode_oversize_video=cfg.download.transcode_oversize_video,
+            transcode_mode=cfg.download.transcode_mode,
+            transcode_trigger_mb=cfg.download.transcode_trigger_mb,
+            transcode_target_size_mb=cfg.download.transcode_target_size_mb,
+            transcode_video_codec=cfg.download.transcode_video_codec,
+            transcode_preset=cfg.download.transcode_preset,
+            transcode_max_height=cfg.download.transcode_max_height,
+            transcode_max_fps=cfg.download.transcode_max_fps,
+            transcode_video_bitrate_kbps=(
+                cfg.download.transcode_video_bitrate_kbps
+            ),
+            transcode_audio_bitrate_kbps=(
+                cfg.download.transcode_audio_bitrate_kbps
+            ),
+            transcode_crf=cfg.download.transcode_crf,
+            transcode_max_attempts=cfg.download.transcode_max_attempts,
+            transcode_extra_args=cfg.download.transcode_extra_args,
             transcode_timeout_seconds=cfg.download.transcode_timeout_seconds,
         )
 
-        self.message_sender = MessageSender()
+        self.message_sender = MessageSender(
+            group_file_timeout_seconds=cfg.download.group_file_timeout_seconds
+        )
         self._cleanup_tasks: set[asyncio.Task] = set()
         self._expired_cleanup_task: Optional[asyncio.Task] = None
         self._youtube_keepalive_task: Optional[asyncio.Task] = None
@@ -692,6 +711,10 @@ class YouTubeNovaPlugin(Star):
                                 None if zip_requested else send_opening_once
                             ),
                             video_cover_only=(False if zip_requested else None),
+                            group_file_available=(
+                                not zip_requested
+                                and self.message_sender.can_upload_group_file(event)
+                            ),
                         )
                     except asyncio.CancelledError:
                         raise

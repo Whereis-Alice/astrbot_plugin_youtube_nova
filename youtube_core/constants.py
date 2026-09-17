@@ -15,11 +15,14 @@ class Config:
     # LLOneBot 实测在 53 MiB 整数边界拒收视频；默认留出转码与封装余量。
     # 其他适配器可在配置中自行提高，0 表示不限制。
     DEFAULT_SEND_VIDEO_MAX_MB = 48.0
-    # 超过可发送上限时先用 ffmpeg 重编码到上限以内再发送，压不下来才只发封面。
+    # 旧配置键仍作为压缩总开关使用；压缩触发条件与参数由独立策略控制。
     DEFAULT_TRANSCODE_OVERSIZE_VIDEO = True
     DEFAULT_TRANSCODE_TIMEOUT_SECONDS = 600
     MIN_TRANSCODE_TIMEOUT_SECONDS = 30
     MAX_TRANSCODE_TIMEOUT_SECONDS = 3600
+    DEFAULT_GROUP_FILE_TIMEOUT_SECONDS = 600
+    MIN_GROUP_FILE_TIMEOUT_SECONDS = 30
+    MAX_GROUP_FILE_TIMEOUT_SECONDS = 3600
     DOWNLOAD_RETRY_ATTEMPTS = 3
     DOWNLOAD_RETRY_BASE_DELAY = 0.5
     

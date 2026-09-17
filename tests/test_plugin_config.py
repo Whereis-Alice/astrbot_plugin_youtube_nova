@@ -4,7 +4,6 @@ from pathlib import Path
 from youtube_core.config_manager import ConfigManager
 from youtube_core.storage.parse_record import ParseRecordManager
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -15,9 +14,52 @@ def test_default_config_builds_only_youtube_parser() -> None:
 
     assert config.parser_output.modes == {"youtube": "全部发送"}
     assert config.download.send_video_max_mb == 48.0
+    assert config.download.oversize_delivery == "cover"
+    assert config.download.transcode_mode == "above_size"
     assert len(parsers) == 1
     assert parsers[0].name == "youtube"
     assert parsers[0].can_parse("https://youtu.be/dQw4w9WgXcQ")
+
+
+def test_group_file_and_compression_policy_are_independent() -> None:
+    config = ConfigManager(
+        {
+            "download": {
+                "max_video_size_mb": 800,
+                "send_video_max_mb": 50,
+                "oversize_delivery": "上传为群文件",
+                "transcode_oversize_video": True,
+                "transcode_mode": "始终压缩",
+                "transcode_trigger_mb": 120,
+                "transcode_target_size_mb": 80,
+                "transcode_video_codec": "libx265",
+                "transcode_preset": "medium",
+                "transcode_max_height": 720,
+                "transcode_max_fps": 24,
+                "transcode_video_bitrate_kbps": 1800,
+                "transcode_audio_bitrate_kbps": 96,
+                "transcode_crf": 22,
+                "transcode_max_attempts": 3,
+                "transcode_extra_args": "-threads 2",
+            }
+        }
+    )
+
+    download = config.download
+    assert download.group_file_enabled is True
+    assert download.transcode_mode == "always"
+    assert download.transcode_trigger_mb == 120
+    assert download.transcode_target_size_mb == 80
+    assert download.transcode_video_codec == "libx265"
+    assert download.transcode_preset == "medium"
+    assert download.transcode_max_height == 720
+    assert download.transcode_max_fps == 24
+    assert download.transcode_video_bitrate_kbps == 1800
+    assert download.transcode_audio_bitrate_kbps == 96
+    assert download.transcode_crf == 22
+    assert download.transcode_max_attempts == 3
+    assert download.transcode_extra_args == "-threads 2"
+    assert download.stream_budget_mb == 800
 
 
 def test_youtube_parser_can_be_disabled() -> None:
