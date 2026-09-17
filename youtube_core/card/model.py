@@ -17,33 +17,16 @@ from .typeset import clean_text, limit_chars
 # 统计行 emoji -> 中文标签
 STAT_LABELS: dict[str, str] = {
     "👍": "点赞",
-    "❤": "喜欢",
-    "❤️": "喜欢",
-    "🧡": "喜欢",
-    "💗": "喜欢",
-    "🪙": "投币",
-    "⭐": "收藏",
-    "↩": "转发",
-    "↩️": "转发",
-    "🔁": "转发",
-    "📢": "转发",
     "💬": "评论",
-    "✉": "回复",
-    "✉️": "回复",
     "👀": "播放",
     "▶": "播放",
-    "💭": "弹幕",
-    "🔗": "链接",
-    "📈": "浏览",
-    "🔥": "热度",
-    "🏄": "在线",
 }
 
 _ICONS_BY_LENGTH = sorted(STAT_LABELS.items(), key=lambda kv: len(kv[0]), reverse=True)
 
 
 def parse_stats(stats_line: str | None) -> list[tuple[str, str]]:
-    """将『👍 1.2万 🪙 8千』解析为 [(标签, 数值)]。"""
+    """将 YouTube 统计行解析为 ``[(标签, 数值)]``。"""
     if not stats_line:
         return []
     tokens = str(stats_line).split()

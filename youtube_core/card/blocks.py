@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from . import surface
-from .model import CommentItem, MediaItem, QuoteItem, compact_number
+from .model import CommentItem, MediaItem, QuoteItem
 from .palette import RGB, RGBA, alpha, darken, mix
 
 # ============================ 基类 ============================
@@ -137,15 +137,11 @@ def _chip(
     return w
 
 
-#: 统计项标签 -> 图标种类（哔哩哔哩风格的图标统计行）
+#: YouTube 统计项标签 -> 图标种类。
 _GLYPH_BY_LABEL: tuple[tuple[tuple[str, ...], str], ...] = (
-    (("播放", "观看", "浏览", "阅读", "view", "play"), "play"),
-    (("弹幕",), "danmaku"),
-    (("评论", "回复", "comment", "reply"), "comment"),
-    (("点赞", "赞", "喜欢", "like", "推荐"), "like"),
-    (("投币", "硬币", "打赏", "coin"), "coin"),
-    (("收藏", "star", "favorite", "mark"), "star"),
-    (("转发", "分享", "share", "repost"), "share"),
+    (("播放", "观看", "浏览", "view", "play"), "play"),
+    (("评论", "comment"), "comment"),
+    (("点赞", "赞", "like"), "like"),
     (("在线", "同时在看"), "eye"),
     (("时长", "时间", "duration"), "clock"),
 )
@@ -177,233 +173,44 @@ def _stat_pairs(ctx: Any, kinds: Sequence[str]) -> list[tuple[str, str]]:
     return picked
 
 
-# ============================ 平台 chrome ============================
+# ============================ YouTube chrome ============================
 
 
 @dataclass(frozen=True)
 class ChromeAction:
-    """底部操作栏里的一个动作。
-
-    :param kind: :func:`surface.glyph` 的图标种类。
-    :param stats: 数值取自哪些统计种类（按顺序取第一个有值的）。
-    :param label: 拿不到数值时显示的文字（"分享" / "保存"）。为空串表示
-        这个动作在没有数值时直接隐藏——B 站操作栏就是纯数字，没有文案。
-    :param solid: 是否用品牌色实心图标（对应客户端里"已互动"的观感）。
-    :param always_show: 既没有数值也没有文案时是否仍画出图标。X 的分享箭头
-        就是这种纯图标动作，缺了它操作栏会少一枚、和原版对不上。
-    :param tint: 实心时强行使用的品牌色。这是「家具自带的颜色」，与皮肤无关：
-        X 的已赞心形永远是粉色 #F91880，哪怕当前皮肤的辅助色是 B 站蓝，
-        也不能被染色。留 None 表示跟随皮肤主强调色。
-    """
+    """YouTube 观看页底部操作栏里的一个动作。"""
 
     kind: str
     stats: tuple[str, ...] = ()
     label: str = ""
     solid: bool = False
     always_show: bool = False
-    tint: RGB | None = None
 
     def resolve_stats(self) -> tuple[str, ...]:
         return self.stats or (self.kind,)
 
 
-#: 操作栏三种画法：
-#:
-#: - ``stack``：图标在上、数字在下、整组居中（哔哩哔哩客户端）
-#: - ``pill``：圆角药丸包住"图标 + 文字"（YouTube 观看页）
-#: - ``inline``：图标与数字同行排开、右对齐，不加底
-#: - ``spread``：同 inline 的画法，但整排横向均匀铺满一整行、上下各一条
-#:   分隔线（X 单帖页的操作栏就是这个形态，右对齐会立刻出戏）
-ACTION_STYLES: tuple[str, ...] = ("stack", "pill", "inline", "spread")
-
-
 @dataclass(frozen=True)
 class ChromeProfile:
-    """页签条与底部操作栏的平台差异。
+    """YouTube 观看页的操作栏动作与评论输入文案。"""
 
-    皮肤只负责基调（配色、字重、圆角、留白）。但"评论 N / 赞和转发 M"这类
-    页签文案、底部操作栏的动作集和输入框 placeholder 是各家客户端自己的
-    语言：B 站说"赞和转发"和"点我发评论"，YouTube 观看页压根没有页签、
-    操作栏是"👍 / 👎 / 分享 / 保存"，X 说"发布你的回复"。把 B 站那一套硬贴
-    到别的平台上会立刻出戏，所以 chrome 按 ``model.platform_key`` 换件。
-
-    :param secondary_tab: 页签条右侧那一枚，``(文案, 求和的统计种类)``；
-        ``None`` 表示该平台没有第二个页签，整枚隐藏。
-    :param actions: 底部操作栏的动作序列，顺序照该平台客户端。
-    :param action_style: 操作栏画法，见 :data:`ACTION_STYLES`。
-    :param comment_hint: 底部评论输入框的 placeholder；空串表示不画输入框。
-    :param hint_own_row: 输入药丸是否独占一行（X 的回复框是浮在最底部的
-        整行 bar，而 B 站是与操作栏挤在同一行）。
-    :param tab_style: 页签条形态。``underline`` 是「评论 N」带下划线的中文社交
-        详情页样式；``rule`` 只画一条分隔线（X 的回复区上方本来就没有页签，
-        硬贴一个带下划线的「评论」会立刻出戏）。
-    :param ipnote_spec: 补充说明行要显示哪些统计，((统计种类, 显示标签), …)；
-        None 表示用区块自己的默认集合。X 那一行是「时间 · 21.4万 查看」。
-    :param ipnote_lead_time: 补充说明行是否以发布时间开头（X 是，B 站不是——
-        B 站的时间在作者行里）。
-    :param identity_sub: 作者行第二行放什么，``time`` 或 ``handle``。X 的名字
-        下面是灰色 @handle，时间被挪到补充说明行。
-    :param verified_glyph: 头像认证角标里的图标种类（X / YouTube 是对勾）。
-    :param verified_tint: 认证角标的圆底颜色。它跟图标一样属于家具本身——X 的
-        蓝勾在任何皮肤下都是 X 蓝，YouTube 的是灰勾——所以不跟皮肤的辅助强调色
-        走。``None`` 表示沿用皮肤的辅助强调色（中文社交那枚蓝闪电就是
-        这样）。
-    :param comment_head: 评论区的 (标题, 排序文案)。
-    :param comment_actions: 每条评论正文下方的迷你操作行图标种类；空元组表示
-        改用「名字右侧一枚赞」的中文社交样式。
-    :param cover_meta: 视频封面左下角是否叠播放量 / 弹幕数角标（X 的视频封面
-        只有时长，没有播放量）。
-    """
-
-    secondary_tab: tuple[str, tuple[str, ...]] | None
     actions: tuple[ChromeAction, ...]
     comment_hint: str
-    action_style: str = "stack"
-    hint_own_row: bool = False
-    tab_style: str = "underline"
-    ipnote_spec: tuple[tuple[str, str], ...] | None = None
-    ipnote_lead_time: bool = False
-    identity_sub: str = "time"
-    verified_glyph: str = "bolt"
-    verified_tint: RGB | None = None
-    comment_head: tuple[str, str] = ("热门评论", "按热度")
-    comment_actions: tuple[str, ...] = ()
-    cover_meta: bool = True
-
-
-#: X 客户端里「已赞」心形的粉色。它属于 X 这套家具本身，任何皮肤下都不变色。
-X_LIKE_PINK: RGB = (249, 24, 128)
-
-#: X 的认证蓝勾底色。同理属于家具，与皮肤无关。
-X_VERIFIED_BLUE: RGB = (29, 155, 240)
 
 #: YouTube 的认证角标是灰底白勾（不是蓝的），照原版取中性灰。
 YT_VERIFIED_GREY: RGB = (144, 144, 144)
 
-#: 中文社交动态（B 站 / 微博 / 小红书…）的通用 chrome，也是未知平台的兜底。
-#: 形态严格照 B 站客户端详情页最底部那条：纯数字，没有文案。
-CHROME_FEED = ChromeProfile(
-    secondary_tab=("赞和转发", ("like", "share")),
-    actions=(
-        ChromeAction("share"),
-        ChromeAction("comment"),
-        ChromeAction("star", solid=True),
-        ChromeAction("like", solid=True),
-    ),
-    comment_hint="点我发评论",
-    action_style="stack",
-)
-
 #: YouTube 观看页：没有页签；操作栏是一排圆角药丸 👍 / 👎 / 分享 / 保存，
 #: 后两枚即使没有数值也带文案（原版就是这样）。
 CHROME_YOUTUBE = ChromeProfile(
-    secondary_tab=None,
     actions=(
         ChromeAction("like", solid=True),
-        ChromeAction("dislike"),
+        ChromeAction("dislike", always_show=True),
         ChromeAction("share", stats=(), label="分享"),
         ChromeAction("star", label="保存"),
     ),
     comment_hint="添加评论…",
-    action_style="pill",
-    verified_glyph="check",
-    verified_tint=YT_VERIFIED_GREY,
-    comment_head=("评论", "排序依据"),
 )
-
-#: X（Twitter）单帖页。逐项对齐原版：
-#:
-#: - 作者行是「名字 + 蓝勾」上、「@handle」下，时间不在这里
-#: - 时间与浏览量合成一行「2026-08-24 08:00 · 21.4万 查看」（原版就这一行）
-#: - 回复区上方没有页签，只有一条分隔线
-#: - 操作栏 5 枚：回复 / 转帖 / 喜欢（粉色心）/ 书签 / 分享，横向均匀铺满
-#:   整行、上下各一条分隔线；回复输入框独占最底一行
-#: - 每条回复正文下方是 💬 / 🔁 / ❤️ 迷你操作行，不是右上角一枚赞
-#: - 视频封面只压时长，没有播放量角标
-CHROME_X = ChromeProfile(
-    secondary_tab=None,
-    actions=(
-        ChromeAction("comment"),
-        ChromeAction("repost", stats=("share",)),
-        ChromeAction("heart", stats=("like",), solid=True, tint=X_LIKE_PINK),
-        ChromeAction("bookmark", stats=("star",), always_show=True),
-        ChromeAction("export", always_show=True),
-    ),
-    comment_hint="发布你的回复",
-    action_style="spread",
-    hint_own_row=True,
-    tab_style="rule",
-    ipnote_spec=(("play", "查看"),),
-    ipnote_lead_time=True,
-    identity_sub="handle",
-    verified_glyph="check",
-    verified_tint=X_VERIFIED_BLUE,
-    comment_head=("回复", "相关"),
-    comment_actions=("comment", "repost", "heart"),
-    cover_meta=False,
-)
-
-#: 竖屏短视频（抖音 / 快手 / TikTok）：无页签，操作栏点赞在前
-CHROME_SHORTS = ChromeProfile(
-    secondary_tab=None,
-    actions=(
-        ChromeAction("like", solid=True),
-        ChromeAction("comment"),
-        ChromeAction("star", solid=True),
-        ChromeAction("share"),
-    ),
-    comment_hint="说点什么…",
-    action_style="stack",
-)
-
-#: Pixiv 作品页：无页签，操作栏 喜欢 / 收藏 / 浏览
-CHROME_PIXIV = ChromeProfile(
-    secondary_tab=None,
-    actions=(
-        ChromeAction("like", solid=True),
-        ChromeAction("star", solid=True),
-        ChromeAction("play"),
-    ),
-    comment_hint="留下评论…",
-    action_style="inline",
-)
-
-#: platform_key -> chrome
-CHROME_BY_PLATFORM: dict[str, ChromeProfile] = {
-    "bilibili": CHROME_FEED,
-    "acfun": CHROME_FEED,
-    "weibo": CHROME_FEED,
-    "xiaohongshu": CHROME_FEED,
-    "xiaoheihe": CHROME_FEED,
-    "nga": CHROME_FEED,
-    "toutiao": CHROME_FEED,
-    "xianyu": CHROME_FEED,
-    "youtube": CHROME_YOUTUBE,
-    "twitter": CHROME_X,
-    "x": CHROME_X,
-    "douyin": CHROME_SHORTS,
-    "kuaishou": CHROME_SHORTS,
-    "tiktok": CHROME_SHORTS,
-    "pixiv": CHROME_PIXIV,
-}
-
-
-def _chrome(ctx: Any) -> ChromeProfile:
-    """当前卡片该用哪套 chrome。"""
-    key = str(getattr(ctx.model, "platform_key", "") or "").strip().lower()
-    return CHROME_BY_PLATFORM.get(key, CHROME_FEED)
-
-
-def _sum_stats(ctx: Any, kinds: Sequence[str]) -> str:
-    """把若干统计种类的数值相加，按压缩数字样式输出；全都取不到则空串。"""
-    numbers = [
-        value
-        for value in (_parse_stat_number(_stat_value(ctx, (kind,))) for kind in kinds)
-        if value is not None
-    ]
-    if not numbers:
-        return ""
-    return compact_number(int(round(sum(numbers))))
 
 
 #: 正文里要走强调色的行内元素：@提及 与裸链接（话题 #...# 单独处理）
@@ -485,13 +292,13 @@ def _draw_rich_para(
 
 
 def _cover_meta(ctx: Any) -> list[tuple[str, str]]:
-    """封面左下角浮层要显示的两项（哔哩哔哩：播放量 + 弹幕数）。"""
+    """封面左下角浮层显示播放量。"""
     picked: list[tuple[str, str]] = []
     for label, value in ctx.model.stats:
         kind = _glyph_kind(label)
-        if kind in ("play", "danmaku") and value:
+        if kind == "play" and value:
             picked.append((kind, value))
-        if len(picked) >= 2:
+        if picked:
             break
     return picked
 
@@ -516,7 +323,7 @@ def _meta_parts(ctx: Any) -> list[str]:
 
 @dataclass
 class EyebrowBlock(Block):
-    """平台 / 类型 / 时间。variant: chip / rule / bracket / plate / bili_top"""
+    """平台 / 类型 / 时间。variant: chip / rule / bracket / plate / detail_top"""
 
     variant: str = "chip"
 
@@ -525,7 +332,7 @@ class EyebrowBlock(Block):
 
     def _measure(self, ctx: Any, width: int) -> int:
         m = ctx.m
-        if self.variant == "bili_top":
+        if self.variant == "detail_top":
             title_f = ctx.font(int(m.f_subtitle * 1.02), bold=True)
             row = max(m.chip_h, ctx.ts.line_height(title_f, 1.0))
             return row + m.gap_md + 1
@@ -540,8 +347,8 @@ class EyebrowBlock(Block):
         f = ctx.font(m.f_eyebrow, bold=True)
         return max(m.unit * 2, ctx.ts.line_height(f, 1.0)) + m.gap_xs + 1
 
-    def _draw_bili_top(self, ctx: Any, layer: Any, x: int, y: int, width: int) -> None:
-        """仿 B 站手机端动态详情页顶栏：返回箭头 + 来源标题 + 右侧更多。
+    def _draw_detail_top(self, ctx: Any, layer: Any, x: int, y: int, width: int) -> None:
+        """YouTube 详情页顶栏：返回箭头 + 来源标题 + 右侧更多。
 
         不画站点字标 / 图标：这张卡片的内容可能来自任意平台，硬贴一个站点标记
         既与右侧来源信息重复，也会和正文的真实出处冲突。
@@ -586,7 +393,7 @@ class EyebrowBlock(Block):
             )
             right_limit -= credit_w + m.gap_md
 
-        # 顶栏正题只写来源站点名，等价于 B 站详情页的"返回 + 标题"；
+        # 顶栏正题只写来源站点名，避免重复显示内容类型标签。
         # 内容类型（图文/视频）已由正文与媒体区块本身表达，不再另贴标签。
         cursor = x + back_w + m.gap_md
         title = model.platform_name or ""
@@ -606,8 +413,8 @@ class EyebrowBlock(Block):
     def draw(self, ctx: Any, layer: Any, x: int, y: int, width: int) -> None:
         m, model, th = ctx.m, ctx.model, ctx.theme
 
-        if self.variant == "bili_top":
-            self._draw_bili_top(ctx, layer, x, y, width)
+        if self.variant == "detail_top":
+            self._draw_detail_top(ctx, layer, x, y, width)
             return
 
         # 通用皮肤的眉标只做两件事：给版面一个开场记号，报出发布时间。
@@ -774,45 +581,34 @@ def _avatar(ctx: Any, layer: Any, x: int, y: int, size: int, *, square: bool = F
 
 @dataclass
 class IdentityBlock(Block):
-    """作者身份。variant: avatar_left / stacked / minimal / plate / bili"""
+    """作者身份。variant: avatar_left / stacked / minimal / plate / detail"""
 
     variant: str = "avatar_left"
 
     def __post_init__(self) -> None:
         self._cache = {}
 
-    def _bili_name_font(self, ctx: Any) -> Any:
-        # 参考手机端动态详情页：UP 主名是较大号的深色粗体，不是粉色
+    def _detail_name_font(self, ctx: Any) -> Any:
+        # YouTube 观看页里的频道名使用略大的粗体。
         return ctx.font(int(ctx.m.f_subtitle * 1.04), bold=True)
 
     @staticmethod
-    def _bili_sub(ctx: Any) -> str:
-        """作者名下面那一行，按平台 chrome 换件。
-
-        B 站系是发布时间；X 是灰色 @handle（时间在下面的补充说明行里，重复一次
-        就跟原版对不上了）。取不到首选项时退回另一项，绝不留空行。
-        """
+    def _detail_sub(ctx: Any) -> str:
+        """YouTube 作者名下面优先显示发布时间，缺失时显示频道标识。"""
         model = ctx.model
-        if _chrome(ctx).identity_sub == "handle":
-            return model.author_handle or model.time_text or ""
         return model.time_text or model.author_handle or ""
 
-    def _bili_badge(self, ctx: Any, layer: Any, x: int, y: int, size: int) -> None:
-        """头像右下角的认证角标：品牌色圆底 + 底色描边 + 平台自己的图标。
-
-        图标种类与底色都按平台 chrome 取：中文社交是蓝闪电，X 是蓝勾，
-        YouTube 是灰勾。只有中文社交那枚会跟着皮肤的辅助强调色走。
-        """
+    def _detail_badge(self, ctx: Any, layer: Any, x: int, y: int, size: int) -> None:
+        """头像右下角的 YouTube 灰底认证勾。"""
         m = ctx.m
         bs = max(11, int(size * 0.30))
         bx1, by1 = x + size, y + size
         box = (bx1 - bs, by1 - bs, bx1, by1)
-        badge_tint = _chrome(ctx).verified_tint or ctx.accent_alt or ctx.accent
         surface.panel(
             layer,
             box,
             bs // 2,
-            fill=alpha(badge_tint, 255),
+            fill=alpha(YT_VERIFIED_GREY, 255),
             border=alpha(ctx.panel_bg, 255),
             border_width=max(1, int(m.hairline * 2)),
         )
@@ -820,27 +616,24 @@ class IdentityBlock(Block):
         surface.glyph(
             layer,
             (box[0] + pad, box[1] + pad, box[2] - pad, box[3] - pad),
-            _chrome(ctx).verified_glyph,
+            "check",
             (255, 255, 255),
         )
 
-    def _draw_bili(self, ctx: Any, layer: Any, x: int, y: int, width: int, total: int) -> None:
-        """哔哩哔哩作者行：大圆头像 + 蓝色认证角标 + 深色昵称 + 灰色时间。
-
-        不贴"UP主"药丸：内容多数并非来自 B 站，这个身份标记会与真实作者身份冲突。
-        """
+    def _draw_detail(self, ctx: Any, layer: Any, x: int, y: int, width: int, total: int) -> None:
+        """YouTube 作者行：头像、认证角标、频道名与发布时间。"""
         m, model = ctx.m, ctx.model
         name = model.author_name or model.platform_name
-        name_f = self._bili_name_font(ctx)
+        name_f = self._detail_name_font(ctx)
         meta_f = ctx.font(m.f_meta)
         name_lh = ctx.ts.line_height(name_f, 1.15)
-        sub = self._bili_sub(ctx)
+        sub = self._detail_sub(ctx)
         sub_lh = ctx.ts.line_height(meta_f, 1.25) if sub else 0
 
         size = m.avatar
         av_top = y + (total - size) // 2
         _avatar(ctx, layer, x, av_top, size)
-        self._bili_badge(ctx, layer, x, av_top, size)
+        self._detail_badge(ctx, layer, x, av_top, size)
 
         right = x + width
         tx = x + size + m.gap_sm
@@ -861,10 +654,10 @@ class IdentityBlock(Block):
         m = ctx.m
         name_f = ctx.font(m.f_subtitle, bold=True)
         meta_f = ctx.font(m.f_meta)
-        if self.variant == "bili":
-            bili_f = self._bili_name_font(ctx)
-            text_h = ctx.ts.line_height(bili_f, 1.15)
-            if self._bili_sub(ctx):
+        if self.variant == "detail":
+            detail_f = self._detail_name_font(ctx)
+            text_h = ctx.ts.line_height(detail_f, 1.15)
+            if self._detail_sub(ctx):
                 text_h += ctx.ts.line_height(meta_f, 1.25)
             return max(m.avatar, text_h)
         if self.variant == "minimal":
@@ -891,8 +684,8 @@ class IdentityBlock(Block):
         meta_f = ctx.font(m.f_meta)
         total = self.measure(ctx, width)
 
-        if self.variant == "bili":
-            self._draw_bili(ctx, layer, x, y, width, total)
+        if self.variant == "detail":
+            self._draw_detail(ctx, layer, x, y, width, total)
             return
 
         if self.variant == "minimal":
@@ -973,7 +766,7 @@ class IdentityBlock(Block):
 
 @dataclass
 class HeadlineBlock(Block):
-    """主标题。variant: display / tight / upper / bili_post"""
+    """主标题。variant: display / tight / upper / detail_post"""
 
     variant: str = "display"
     max_lines: int = 4
@@ -993,8 +786,8 @@ class HeadlineBlock(Block):
         base = m.f_title
         leading = m.lh_snug
         tracking = th.tracking_headline
-        if self.variant == "bili_post":
-            # B 站动态正文：字号只比正文略大、行距宽松，标题与首段共用同一套排版
+        if self.variant == "detail_post":
+            # YouTube 详情标题：字号只比正文略大，保留舒展行距。
             size = max(m.f_body, int(round(m.f_body * 1.18 * self.scale * th.headline_scale)))
             bold = ctx.model.has_real_title
             font = ctx.font(size, bold=bold)
@@ -1035,7 +828,7 @@ class HeadlineBlock(Block):
         lines, font, leading, tracking = self._plan(ctx, width)
         if not lines:
             return
-        if self.variant == "bili_post":
+        if self.variant == "detail_post":
             _draw_rich_para(
                 ctx,
                 layer,
@@ -1057,7 +850,7 @@ class HeadlineBlock(Block):
 
 @dataclass
 class BodyBlock(Block):
-    """正文。variant: plain / dropcap / indent / bili"""
+    """正文。variant: plain / dropcap / indent / detail"""
 
     variant: str = "plain"
     max_lines: int = 7
@@ -1072,7 +865,7 @@ class BodyBlock(Block):
             return cached
         m = ctx.m
         font = ctx.font(m.f_body)
-        leading = m.lh_loose if self.variant == "bili" else m.lh_normal
+        leading = m.lh_loose if self.variant == "detail" else m.lh_normal
         text = ctx.model.body
         plan: dict[str, Any] = {"font": font, "leading": leading, "variant": self.variant}
         if self.variant == "dropcap" and len(text) > 24:
@@ -1118,7 +911,7 @@ class BodyBlock(Block):
             return
         lines = plan["lines"]
         indent = plan["indent"]
-        if self.variant == "bili":
+        if self.variant == "detail":
             _draw_rich_para(ctx, layer, x, y, lines, font, ctx.ink, ctx.accent_alt_text, leading=leading)
             return
         if indent:
@@ -1192,7 +985,7 @@ def _boxes(
 ) -> tuple[list[tuple[int, int, int, int]], int]:
     """返回相对 (0,0) 的贴片框与总高度。
 
-    force_aspect 不为空时，网格单元强制使用该宽高比（哔哩哔哩九宫格用 1.0 的正方格），
+    force_aspect 不为空时，网格单元强制使用该宽高比，
     而不是按素材真实比例推导。此时 scale 不再参与高度计算——scale 是"整体缩放"旋钮，
     只压高度会把指定的宽高比拉扁（信息流布局 scale=0.88 会让正方格变成 227x200）。
     """
@@ -1267,7 +1060,7 @@ def _boxes(
     # grid3：以 3 列为基准的齐边网格。末行不足 3 张时把该行单元拉宽填满整幅宽度，
     # 绝不留空洞格子；所有单元共用同一宽高比，因此行高随该行张数变化，形成层次。
     if force_aspect:
-        # 固定 3 列等比方格（哔哩哔哩九宫格）：单元尺寸恒定，末行不拉伸
+        # 固定 3 列等比方格：单元尺寸恒定，末行不拉伸。
         cell_w = (width - gap * 2) // 3
         row_h = max(1, int(round(cell_w / force_aspect)))
         for index in range(count):
@@ -1354,8 +1147,8 @@ def _corner_tag(ctx: Any, layer: Any, box: tuple[int, int, int, int], text: str,
     ctx.text(layer, (x0 + pad, y1 - h + pad // 2), text, font, ctx.accent_ink if strong else (255, 255, 255), bold=True)
 
 
-def _bili_cover_overlay(ctx: Any, layer: Any, box: tuple[int, int, int, int], item: MediaItem, radius: int) -> None:
-    """哔哩哔哩封面浮层：底部渐变 + 左下播放/弹幕图标 + 右下时长（纯白字，不用胶囊）。"""
+def _detail_cover_overlay(ctx: Any, layer: Any, box: tuple[int, int, int, int], item: MediaItem, radius: int) -> None:
+    """YouTube 封面浮层：底部渐变、统计与右下角时长。"""
     x0, y0, x1, y1 = box
     bw, bh = x1 - x0, y1 - y0
     if bw <= 0 or bh <= 0:
@@ -1372,8 +1165,7 @@ def _bili_cover_overlay(ctx: Any, layer: Any, box: tuple[int, int, int, int], it
     ty = y1 - m.gap_xs - lh
     cursor = x0 + m.gap_xs
     icon = max(9, int(lh * 0.88))
-    # X 的视频封面只压时长，没有播放量 / 弹幕角标，硬加会立刻出戏
-    meta = _cover_meta(ctx) if _chrome(ctx).cover_meta else []
+    meta = _cover_meta(ctx)
     for kind, value in meta:
         gy = ty + max(0, (lh - icon) // 2)
         surface.glyph(layer, (cursor, gy, cursor + icon, gy + icon), kind, (255, 255, 255, 232))
@@ -1389,7 +1181,7 @@ def _bili_cover_overlay(ctx: Any, layer: Any, box: tuple[int, int, int, int], it
 
 @dataclass
 class MediaBlock(Block):
-    """媒体网格。variant: editorial / framed / window / feed / mosaic / bili"""
+    """媒体网格。variant: editorial / framed / window / feed / mosaic / detail"""
 
     variant: str = "editorial"
 
@@ -1413,7 +1205,7 @@ class MediaBlock(Block):
             gap = max(gap, m.gap_sm)
         elif self.variant == "window":
             gap = max(gap, m.gap_sm)
-        elif self.variant in ("feed", "bili"):
+        elif self.variant in ("feed", "detail"):
             gap = max(3, m.media_gap - 2)
         inner = max(40, width - mat * 2)
         mode = _pick_mode(len(items), items, ctx.layout.media_mode)
@@ -1424,10 +1216,10 @@ class MediaBlock(Block):
             gap,
             items,
             ctx.layout.media_scale,
-            force_aspect=1.0 if self.variant == "bili" else None,
+            force_aspect=1.0 if self.variant == "detail" else None,
         )
-        if self.variant == "bili" and boxes and model.hero_is_video and mode in ("hero", "filmstrip"):
-            # 哔哩哔哩的视频封面永远是 16:9，强制首图比例并整体下移后续贴片
+        if self.variant == "detail" and boxes and model.hero_is_video and mode in ("hero", "filmstrip"):
+            # YouTube 视频封面固定为 16:9，强制首图比例并整体下移后续贴片。
             bx0, by0, bx1, by1 = boxes[0]
             target_h = max(40, int(round((bx1 - bx0) * 9.0 / 16.0 * ctx.layout.media_scale)))
             delta = target_h - (by1 - by0)
@@ -1461,7 +1253,7 @@ class MediaBlock(Block):
             radius = 0
         elif self.variant == "feed":
             radius = max(4, int(m.radius_media * 0.7))
-        elif self.variant == "bili":
+        elif self.variant == "detail":
             radius = max(3, m.radius_media)
 
         if self.variant == "framed":
@@ -1488,7 +1280,7 @@ class MediaBlock(Block):
             bw, bh = bx1 - bx0, by1 - by0
             if bw <= 0 or bh <= 0:
                 continue
-            if self.variant in ("editorial", "feed", "mosaic", "bili"):
+            if self.variant in ("editorial", "feed", "mosaic", "detail"):
                 surface.panel(
                     layer,
                     (bx0, by0, bx1, by1),
@@ -1528,11 +1320,11 @@ class MediaBlock(Block):
                 )
             # hero 上的播放按钮 / 时长
             if index == 0 and item.is_video:
-                if self.variant == "bili":
-                    _bili_cover_overlay(ctx, layer, (bx0, by0, bx1, by1), item, radius)
+                if self.variant == "detail":
+                    _detail_cover_overlay(ctx, layer, (bx0, by0, bx1, by1), item, radius)
                 if ctx.show_play_button:
                     _play_badge(ctx, layer, (bx0, by0, bx1, by1))
-                if item.duration and self.variant != "bili":
+                if item.duration and self.variant != "detail":
                     _corner_tag(ctx, layer, (bx0, by0, bx1, by1), item.duration)
             if ctx.theme.caption_numbering and shown > 1:
                 _corner_tag(
@@ -1602,7 +1394,7 @@ def _stat_value_number(value: str) -> float:
 
 @dataclass
 class StatsBlock(Block):
-    """互动数据。variant: chips / ledger / bars / inline / bili"""
+    """互动数据。variant: chips / ledger / bars / inline / detail"""
 
     variant: str = "chips"
 
@@ -1619,7 +1411,7 @@ class StatsBlock(Block):
         label_f = ctx.font(m.f_label)
         value_f = ctx.font(m.f_value, bold=True)
         plan: dict[str, Any] = {"label_f": label_f, "value_f": value_f}
-        if self.variant == "bili":
+        if self.variant == "detail":
             font = ctx.font(m.f_meta)
             icon = max(10, int(m.f_meta * 1.15))
             row_h = max(ctx.ts.line_height(font, 1.0), icon)
@@ -1718,7 +1510,7 @@ class StatsBlock(Block):
         plan = self._plan(ctx, width)
         label_f, value_f = plan["label_f"], plan["value_f"]
 
-        if self.variant == "bili":
+        if self.variant == "detail":
             font, icon = plan["font"], plan["icon"]
             row_h, gap = plan["row_h"], plan["gap"]
             lh = ctx.ts.line_height(font, 1.0)
@@ -1834,14 +1626,14 @@ class StatsBlock(Block):
 
 @dataclass
 class IpNoteBlock(Block):
-    """哔哩哔哩式的补充说明行：把播放、弹幕、投币等次要数据压成一行灰色小字。
+    """把播放量、时长等次要信息压成一行灰色小字。
 
     没有可显示内容时高度为 0 且完全不绘制，避免版面出现空洞。
     """
 
-    variant: str = "bili"
+    variant: str = "detail"
     #: 只放"消费类"指标；点赞/投币/收藏/转发/评论 留给底部操作栏，避免同一数字出现两次。
-    kinds: tuple[str, ...] = ("play", "danmaku", "eye", "clock")
+    kinds: tuple[str, ...] = ("play", "eye", "clock")
 
     def __post_init__(self) -> None:
         self._cache = {}
@@ -1852,20 +1644,11 @@ class IpNoteBlock(Block):
         if cached is not None:
             return cached
         m = ctx.m
-        chrome = _chrome(ctx)
         font = ctx.font(m.f_caption)
-        parts: list[str] = []
-        if chrome.ipnote_lead_time and ctx.model.time_text:
-            parts.append(ctx.model.time_text)
-        if chrome.ipnote_spec is None:
-            parts += [f"{label} {value}".strip() for label, value in _stat_pairs(ctx, self.kinds)]
-        else:
-            # 平台自己指定了这一行的内容与措辞（X：「21.4万 查看」），
-            # 用平台标签而不是解析结果里的原始标签，避免与页签/操作栏撞词
-            for kind, label in chrome.ipnote_spec:
-                value = _stat_value(ctx, (kind,))
-                if value:
-                    parts.append(f"{value} {label}".strip())
+        parts = [
+            f"{label} {value}".strip()
+            for label, value in _stat_pairs(ctx, self.kinds)
+        ]
         text = ctx.ts.ellipsize(" · ".join(parts), font, max(20, width)) if parts else ""
         plan = {
             "font": font,
@@ -1883,89 +1666,6 @@ class IpNoteBlock(Block):
         if not plan["text"]:
             return
         ctx.text(layer, (x, y), plan["text"], plan["font"], ctx.ink_muted)
-
-
-@dataclass
-class TabBarBlock(Block):
-    """社交详情页的页签条：选中的"评论 N"带品牌色下划线，右邻一枚次级页签。
-
-    次级页签由平台 chrome 决定（见 :class:`ChromeProfile`）：B 站是"赞和转发 M"，
-    M 为点赞与转发之和（817 赞 + 19 转发 = 836）。任一侧数值缺失时只累加拿得到
-    的那一侧。**数值完全取不到，或平台本来就没有第二个页签（YouTube 观看页）时
-    整枚隐藏**——留一个光标签比不画更出戏。
-
-    ``tab_style="rule"`` 的平台（X）压根没有这条页签，此时只画一条分隔线把正文
-    与回复区隔开，回复数由底部操作栏那枚 💬 承担。
-    """
-
-    variant: str = "bili"
-
-    def __post_init__(self) -> None:
-        self._cache = {}
-        self._plans: dict[int, dict[str, Any]] = {}
-
-    def _labels(self, ctx: Any) -> tuple[str, str]:
-        model = ctx.model
-        count = _stat_value(ctx, ("comment",))
-        if not count and model.comments:
-            count = str(len(model.comments))
-        active = f"评论 {count}".strip() if count else "评论"
-        return active, self._secondary(ctx)
-
-    @staticmethod
-    def _secondary(ctx: Any) -> str:
-        """次级页签文案，按平台 chrome 取；无值即空串（不画）。"""
-        spec = _chrome(ctx).secondary_tab
-        if spec is None:
-            return ""
-        label, kinds = spec
-        total = _sum_stats(ctx, kinds)
-        return f"{label} {total}" if total else ""
-
-    def _plan(self, ctx: Any, width: int) -> dict[str, Any]:
-        cached = self._plans.get(width)
-        if cached is not None:
-            return cached
-        m = ctx.m
-        style = _chrome(ctx).tab_style
-        active_f = ctx.font(int(m.f_meta * 1.06), bold=True)
-        rest_f = ctx.font(int(m.f_meta * 1.06))
-        row = max(ctx.ts.line_height(active_f, 1.0), ctx.ts.line_height(rest_f, 1.0))
-        rule = max(2, int(m.unit * 0.6))
-        plan = {
-            "style": style,
-            "active_f": active_f,
-            "rest_f": rest_f,
-            "row": row,
-            "rule": rule,
-            "height": (m.gap_sm + 1 + m.gap_sm) if style == "rule" else (row + m.gap_2xs + rule + m.gap_sm + 1),
-        }
-        self._plans[width] = plan
-        return plan
-
-    def _measure(self, ctx: Any, width: int) -> int:
-        return int(self._plan(ctx, width)["height"])
-
-    def draw(self, ctx: Any, layer: Any, x: int, y: int, width: int) -> None:
-        m = ctx.m
-        plan = self._plan(ctx, width)
-        if plan["style"] == "rule":
-            surface.hairline(layer, x, y + m.gap_sm, x + width, ctx.hair)
-            return
-        active, rest = self._labels(ctx)
-        row, rule = plan["row"], plan["rule"]
-        aw = ctx.text(layer, (x, y), active, plan["active_f"], ctx.accent_text, bold=True)
-        under_y = y + row + m.gap_2xs
-        surface.panel(
-            layer,
-            (x, under_y, x + max(8, aw), under_y + rule),
-            rule // 2,
-            fill=alpha(ctx.accent, 255),
-        )
-        cursor = x + aw + m.gap_xl
-        if rest and cursor + ctx.ts.width(rest, plan["rest_f"]) <= x + width:
-            ctx.text(layer, (cursor, y), rest, plan["rest_f"], ctx.ink_muted)
-        surface.hairline(layer, x, under_y + rule + m.gap_sm, x + width, ctx.hair)
 
 
 # ============================ 转发引用 ============================
@@ -2185,7 +1885,7 @@ def _comment_avatar(
 
 @dataclass
 class CommentsBlock(Block):
-    """热门评论。variant: cards / thread / quote / bili"""
+    """热门评论。variant: cards / thread / quote / detail"""
 
     variant: str = "cards"
     limit: int = 3
@@ -2222,8 +1922,8 @@ class CommentsBlock(Block):
         elif self.variant == "thread":
             pad = 0
             avatar_offset = m.gap_md
-        elif self.variant == "bili":
-            # 页签条已经写了"评论 N"，这里退成次级灰标题，且不再画一道重复的分割线
+        elif self.variant == "detail":
+            # YouTube 详情评论区使用次级灰标题。
             head_f = ctx.font(m.f_meta)
             head_h = ctx.ts.line_height(head_f, 1.0) + m.gap_md
             name_f = ctx.font(m.f_meta)
@@ -2238,14 +1938,7 @@ class CommentsBlock(Block):
             avatar_offset = ctx.ts.width("“", mark_f) + m.gap_2xs
         indent = avatar_offset + avatar_size + m.gap_sm
 
-        # X 的回复是「正文下方一排 💬 / 🔁 / ❤️ 迷你操作行」，而不是名字右侧一枚赞
-        act_kinds = _chrome(ctx).comment_actions if self.variant == "bili" else ()
-        act_icon = max(11, int(round(m.f_caption * 1.06)))
-        act_h = (act_icon + m.gap_xs) if act_kinds else 0
-        plan["act_kinds"] = act_kinds
-        plan["act_icon"] = act_icon
-
-        row_gap = m.gap_md if self.variant == "bili" else m.gap_sm
+        row_gap = m.gap_md if self.variant == "detail" else m.gap_sm
         rows: list[dict[str, Any]] = []
         total = head_h
         for item in items:
@@ -2255,10 +1948,9 @@ class CommentsBlock(Block):
             h += ctx.ts.line_height(name_f, 1.15)
             h += ctx.ts.paragraph_height(lines, text_f, m.lh_snug)
             meta_h = 0
-            if self.variant == "bili" and item.time and not act_kinds:
+            if self.variant == "detail" and item.time:
                 meta_h = ctx.ts.line_height(meta_f, 1.35)
                 h += meta_h
-            h += act_h
             h += pad
             if avatar_size:
                 h = max(h, avatar_size)
@@ -2284,38 +1976,6 @@ class CommentsBlock(Block):
         self._plans[width] = plan
         return plan
 
-    def _draw_comment_actions(
-        self,
-        ctx: Any,
-        layer: Any,
-        x: int,
-        y: int,
-        kinds: tuple[str, ...],
-        icon: int,
-        likes: str,
-        font: Any,
-    ) -> None:
-        """回复正文下方的迷你操作行（X 形态）。
-
-        等间距铺开，只有心形后面挂数字——其余动作的真实计数解析不到，编一个
-        比留空更糟。图标一律走 ink_muted，绝不上品牌色，免得整片评论区花掉。
-        """
-        m = ctx.m
-        tint = alpha(ctx.ink_muted, 220)
-        pitch = max(icon * 4, m.gap_xl * 2)
-        row = ctx.ts.line_height(font, 1.0)
-        for index, kind in enumerate(kinds):
-            left = x + index * pitch
-            surface.glyph(layer, (left, y, left + icon, y + icon), kind, tint)
-            if kind == "heart" and likes:
-                ctx.text(
-                    layer,
-                    (left + icon + m.gap_2xs, y + max(0, (icon - row) // 2)),
-                    likes,
-                    font,
-                    ctx.ink_muted,
-                )
-
     def _measure(self, ctx: Any, width: int) -> int:
         return int(self._plan(ctx, width)["height"])
 
@@ -2327,9 +1987,9 @@ class CommentsBlock(Block):
         m, pal = ctx.m, ctx.pal
         head_f = plan["head_f"]
         row_gap = int(plan.get("row_gap") or m.gap_sm)
-        if self.variant == "bili":
+        if self.variant == "detail":
             head_lh = ctx.ts.line_height(head_f, 1.0)
-            head_text, sort_text = _chrome(ctx).comment_head
+            head_text, sort_text = "评论", "排序依据"
             ctx.text(layer, (x, y), head_text, head_f, ctx.ink_muted)
             sort_f = ctx.font(m.f_caption)
             sw = ctx.ts.width(sort_text, sort_f)
@@ -2358,7 +2018,7 @@ class CommentsBlock(Block):
         for index, row in enumerate(rows):
             item: CommentItem = row["item"]
             h = row["h"]
-            if self.variant == "bili":
+            if self.variant == "detail":
                 if avatar_size:
                     _comment_avatar(
                         ctx,
@@ -2372,47 +2032,46 @@ class CommentsBlock(Block):
                 tx = x + indent
                 ty = cursor
                 avail = max(20, x + width - tx)
-                act_kinds = plan.get("act_kinds") or ()
                 likes = str(item.likes) if item.likes and item.likes != "0" else ""
-                if act_kinds:
-                    # X 形态：名字后面直接跟「· 时间」，赞数交给下方迷你操作行
-                    head_line = item.username
-                    if item.time:
-                        head_line = f"{head_line} · {item.time}"
+                icon_w = max(9, int(m.f_meta * 0.95)) if likes else 0
+                tail_w = (
+                    icon_w + m.gap_2xs + ctx.ts.width(likes, meta_f)
+                    if likes
+                    else 0
+                )
+                ctx.text(
+                    layer,
+                    (tx, ty),
+                    ctx.ts.ellipsize(
+                        item.username,
+                        name_f,
+                        max(20, avail - tail_w - m.gap_sm),
+                    ),
+                    name_f,
+                    ctx.ink_muted,
+                )
+                if likes:
+                    tail_x = x + width - tail_w
+                    gy = ty + max(
+                        0,
+                        (ctx.ts.line_height(name_f, 1.0) - icon_w) // 2,
+                    )
+                    surface.glyph(
+                        layer,
+                        (tail_x, gy, tail_x + icon_w, gy + icon_w),
+                        "like",
+                        alpha(ctx.ink_muted, 255),
+                    )
                     ctx.text(
                         layer,
-                        (tx, ty),
-                        ctx.ts.ellipsize(head_line, name_f, avail),
+                        (tail_x + icon_w + m.gap_2xs, ty),
+                        likes,
                         name_f,
                         ctx.ink_muted,
                     )
-                else:
-                    icon_w = max(9, int(m.f_meta * 0.95)) if likes else 0
-                    tail_w = (icon_w + m.gap_2xs + ctx.ts.width(likes, meta_f)) if likes else 0
-                    ctx.text(
-                        layer,
-                        (tx, ty),
-                        ctx.ts.ellipsize(item.username, name_f, max(20, avail - tail_w - m.gap_sm)),
-                        name_f,
-                        ctx.ink_muted,
-                    )
-                    if likes:
-                        tail_x = x + width - tail_w
-                        gy = ty + max(0, (ctx.ts.line_height(name_f, 1.0) - icon_w) // 2)
-                        surface.glyph(
-                            layer,
-                            (tail_x, gy, tail_x + icon_w, gy + icon_w),
-                            "like",
-                            alpha(ctx.ink_muted, 255),
-                        )
-                        ctx.text(layer, (tail_x + icon_w + m.gap_2xs, ty), likes, name_f, ctx.ink_muted)
                 ty += ctx.ts.line_height(name_f, 1.15)
                 ty += ctx.para(layer, (tx, ty), row["lines"], text_f, ctx.ink, leading=m.lh_snug)
-                if act_kinds:
-                    self._draw_comment_actions(
-                        ctx, layer, tx, ty + m.gap_xs, act_kinds, int(plan["act_icon"]), likes, meta_f
-                    )
-                elif row.get("meta_h"):
+                if row.get("meta_h"):
                     ctx.text(layer, (tx, ty + m.gap_2xs), f"{item.time} 回复", meta_f, ctx.ink_muted)
                 cursor += h + row_gap
                 continue
@@ -2587,9 +2246,9 @@ def _url_flow(
 
 @dataclass
 class FooterBlock(Block):
-    """页脚：链接 + 水印。variant: rule / plate / minimal / ledger / bili
+    """页脚：链接 + 水印。variant: rule / plate / minimal / ledger / detail
 
-    链接过长时折成最多三行（而不是截断），与 card_footer_url 的"不省略"约定保持一致。
+    链接过长时折成最多三行，而不是截断原始地址。
     """
 
     variant: str = "rule"
@@ -2611,11 +2270,11 @@ class FooterBlock(Block):
         font = ctx.font(m.f_footer)
         mark_f = ctx.font(m.f_footer, bold=True)
         row = ctx.ts.line_height(font, 1.2)
-        mark_tracking = 0.0 if self.variant == "bili" else 1.2
+        mark_tracking = 0.0 if self.variant == "detail" else 1.2
         mark_w = ctx.ts.tracked_width(mark, mark_f, mark_tracking) if mark else 0
 
-        if self.variant == "bili":
-            return self._plan_bili(ctx, width, font, row)
+        if self.variant == "detail":
+            return self._plan_detail(ctx, width, font, row)
 
         if self.variant == "plate":
             inner_w = max(40, width - m.gap_sm * 2)
@@ -2656,89 +2315,53 @@ class FooterBlock(Block):
     def _measure(self, ctx: Any, width: int) -> int:
         return int(self._plan(ctx, width)["height"])
 
-    def _plan_bili(self, ctx: Any, width: int, font: Any, row: int) -> dict[str, Any]:
-        """底部操作栏的排版计算，按平台 chrome 换件。
-
-        左边一枚圆角输入药丸（placeholder 由 chrome 给），右边一排动作。动作的
-        画法有三种（stack / pill / inline，见 :data:`ACTION_STYLES`），共用同一套
-        右对齐几何，所以窄卡片上的让位逻辑只需要写一遍。链接与水印已迁往顶栏
-        右上角，这里不再承担它们，操作栏因此能干净地落在卡片最底部。
-        """
+    def _plan_detail(self, ctx: Any, width: int, font: Any, row: int) -> dict[str, Any]:
+        """YouTube 操作栏：左侧评论输入槽，右侧圆角动作药丸。"""
         m = ctx.m
-        chrome = _chrome(ctx)
-        style = chrome.action_style
         icon = max(15, int(round(m.f_body * 1.32)))
         num_f = ctx.font(max(10, int(round(m.f_caption * 1.02))))
         num_row = ctx.ts.line_height(num_f, 1.0)
-        stack_gap = max(2, int(round(m.unit * 0.9)))
-
-        # 药丸内的图标与文字间距，以及药丸的上下留白
         pad_in = max(m.gap_2xs, int(round(m.unit * 1.6)))
         pill_pad_y = max(3, int(round(m.unit * 1.9)))
         act_pill_h = icon + pill_pad_y * 2
         act_pill_pad_x = max(m.gap_xs, int(round(act_pill_h * 0.34)))
 
         actions: list[dict[str, Any]] = []
-        for action in chrome.actions:
+        for action in CHROME_YOUTUBE.actions:
             value = _stat_value(ctx, action.resolve_stats()) if action.resolve_stats() else ""
             text = value or action.label
             if not text and not action.label and not action.always_show:
                 continue
             text_w = ctx.ts.width(text, num_f) if text else 0
-            if style == "stack":
-                # B 站：图标在上、数字在下，没有数字就不画这一组
-                if not value:
-                    continue
-                col, item_h = max(icon, text_w), icon + stack_gap + num_row
-            elif style == "pill":
-                inner = icon + ((pad_in + text_w) if text else 0)
-                col, item_h = inner + act_pill_pad_x * 2, act_pill_h
-            else:  # inline
-                col = icon + ((pad_in + text_w) if text else 0)
-                item_h = max(icon, num_row)
+            inner = icon + ((pad_in + text_w) if text else 0)
             actions.append(
                 {
                     "kind": action.kind,
                     "text": text,
                     "solid": action.solid,
-                    "tint": action.tint,
-                    "col": col,
-                    "text_w": text_w,
-                    "height": item_h,
+                    "col": inner + act_pill_pad_x * 2,
                 }
             )
 
-        act_gap = max(m.gap_xs, int(round(m.unit * (6 if style == "stack" else 2.6))))
+        act_gap = max(m.gap_xs, int(round(m.unit * 2.6)))
         actions_w = sum(int(item["col"]) for item in actions)
         if actions:
             actions_w += act_gap * (len(actions) - 1)
-        stack_h = max([int(item["height"]) for item in actions], default=icon)
 
-        hint = chrome.comment_hint
+        hint = CHROME_YOUTUBE.comment_hint
         hint_f = ctx.font(m.f_meta)
         hint_row = ctx.ts.line_height(hint_f, 1.0)
         pill_pad_y2 = max(m.gap_xs, int(round(m.unit * 2.2)))
         pill_h = hint_row + pill_pad_y2 * 2
         pill_pad_x = max(m.gap_sm, pill_h // 2)
         hint_w = ctx.ts.width(hint, hint_f) if hint else 0
-        # X 的回复框独占最底一行，可以吃满整幅；其余平台与操作栏挤同一行，
-        # 药丸吃掉操作栏之外的剩余宽度，太窄时（超小卡片）整个让位
-        own_row = bool(hint) and bool(chrome.hint_own_row)
-        pill_w = width if own_row else (width - actions_w - (act_gap if actions else 0))
+        pill_w = width - actions_w - (act_gap if actions else 0)
         show_pill = bool(hint) and pill_w >= hint_w + pill_pad_x * 2
         if not show_pill:
             pill_w = 0
 
-        spread = style == "spread"
-        bar_h = max(stack_h, 0 if own_row else (pill_h if show_pill else 0))
+        bar_h = max(act_pill_h if actions else 0, pill_h if show_pill else 0)
         head = m.gap_sm + 1 + m.gap_md
-        # spread 形态在操作栏下方还有一条分隔线；独占行的药丸再往下让一段。
-        # rule_gap 是「操作栏底 -> 分隔线」的距离，pill_gap 是「分隔线 -> 药丸」，
-        # 两段都要留够，否则线会贴在药丸边上、看起来像药丸自己的描边。
-        rule_gap = m.gap_sm
-        rule_h = (rule_gap + 1) if spread else 0
-        pill_gap = m.gap_md
-        extra = rule_h + ((pill_gap + pill_h) if (own_row and show_pill) else 0)
         plan = {
             "font": font,
             "mark": "",
@@ -2750,12 +2373,9 @@ class FooterBlock(Block):
             "inner_w": max(40, width),
             "offset_x": 0,
             "offset_y": head,
-            "style": style,
             "icon": icon,
             "num_f": num_f,
             "num_row": num_row,
-            "stack_gap": stack_gap,
-            "stack_h": stack_h,
             "pad_in": pad_in,
             "act_pill_h": act_pill_h,
             "act_pill_pad_x": act_pill_pad_x,
@@ -2769,16 +2389,9 @@ class FooterBlock(Block):
             "pill_h": pill_h,
             "pill_pad_x": pill_pad_x,
             "show_pill": show_pill,
-            "own_row": own_row,
-            "spread": spread,
-            "rule_below": spread,
-            "rule_gap": rule_gap,
-            "rule_h": rule_h,
-            "pill_gap": pill_gap,
             "bar_h": bar_h,
             "head": head,
-            "extra": extra,
-            "height": head + bar_h + extra,
+            "height": head + bar_h,
         }
         self._plans[width] = plan
         return plan
@@ -2793,65 +2406,42 @@ class FooterBlock(Block):
         plan: dict[str, Any],
         bar_h: int,
     ) -> None:
-        """画一个动作。三种画法共用"给定左上角 + 列宽"的契约。"""
+        """画一枚 YouTube 圆角动作药丸。"""
         pal = ctx.pal
-        style = plan["style"]
         icon = int(plan["icon"])
         col = int(item["col"])
         num_f = plan["num_f"]
         text = str(item["text"])
-        # 实心=品牌色（对应原版"已互动"的观感），其余走中性
-        own_color = item.get("tint")
-        if own_color is not None:
-            # 家具自带的品牌色（X 的已赞粉）：与皮肤无关，也不跟随辅助强调色
-            brand = tuple(own_color)
-            solid_text = brand
-        else:
-            brand = ctx.accent
-            solid_text = ctx.accent_text
-        tint = brand if item["solid"] else ctx.ink_muted
-        text_ink = solid_text if item["solid"] else ctx.ink_dim
-
-        if style == "stack":
-            stack_h = icon + int(plan["stack_gap"]) + int(plan["num_row"])
-            y0 = top + max(0, (bar_h - stack_h) // 2)
-            gx = int(round(left + col / 2.0 - icon / 2.0))
-            surface.glyph(layer, (gx, y0, gx + icon, y0 + icon), item["kind"], alpha(tint, 255))
-            tw = int(item["text_w"])
+        tint = ctx.accent if item["solid"] else ctx.ink_muted
+        text_ink = ctx.accent_text if item["solid"] else ctx.ink_dim
+        pill_h = int(plan["act_pill_h"])
+        y0 = top + max(0, (bar_h - pill_h) // 2)
+        surface.panel(
+            layer,
+            (left, y0, left + col, y0 + pill_h),
+            pill_h // 2,
+            fill=alpha(
+                mix(pal.surface, ctx.ink, 0.14 if pal.is_dark else 0.07),
+                255,
+            ),
+        )
+        gx = left + int(plan["act_pill_pad_x"])
+        gy = y0 + (pill_h - icon) // 2
+        surface.glyph(
+            layer,
+            (gx, gy, gx + icon, gy + icon),
+            item["kind"],
+            alpha(tint, 255),
+        )
+        if text:
+            ty = y0 + max(0, (pill_h - int(plan["num_row"])) // 2)
             ctx.text(
                 layer,
-                (int(round(left + col / 2.0 - tw / 2.0)), y0 + icon + int(plan["stack_gap"])),
+                (gx + icon + int(plan["pad_in"]), ty),
                 text,
                 num_f,
-                ctx.ink_dim,
+                text_ink,
             )
-            return
-
-        if style == "pill":
-            pill_h = int(plan["act_pill_h"])
-            y0 = top + max(0, (bar_h - pill_h) // 2)
-            surface.panel(
-                layer,
-                (left, y0, left + col, y0 + pill_h),
-                pill_h // 2,
-                fill=alpha(mix(pal.surface, ctx.ink, 0.14 if pal.is_dark else 0.07), 255),
-            )
-            gx = left + int(plan["act_pill_pad_x"])
-            gy = y0 + (pill_h - icon) // 2
-            surface.glyph(layer, (gx, gy, gx + icon, gy + icon), item["kind"], alpha(tint, 255))
-            if text:
-                ty = y0 + max(0, (pill_h - int(plan["num_row"])) // 2)
-                ctx.text(layer, (gx + icon + int(plan["pad_in"]), ty), text, num_f, text_ink)
-            return
-
-        # inline：图标与文字同行，不加底
-        row_h = max(icon, int(plan["num_row"]))
-        y0 = top + max(0, (bar_h - row_h) // 2)
-        gy = y0 + (row_h - icon) // 2
-        surface.glyph(layer, (left, gy, left + icon, gy + icon), item["kind"], alpha(tint, 255))
-        if text:
-            ty = y0 + max(0, (row_h - int(plan["num_row"])) // 2)
-            ctx.text(layer, (left + icon + int(plan["pad_in"]), ty), text, num_f, text_ink)
 
     def _draw_hint_pill(
         self,
@@ -2882,19 +2472,13 @@ class FooterBlock(Block):
             ctx.ink_muted,
         )
 
-    def _draw_bili(self, ctx: Any, layer: Any, x: int, y: int, width: int, plan: dict[str, Any]) -> None:
-        """底部操作栏：平台自己的那排动作 + 评论输入药丸。
-
-        两种形态：B 站系是「输入药丸 + 右对齐动作」挤在同一行；X 是「动作横向
-        铺满整行、上下各一条分隔线」，回复框独占最底一行。
-        """
+    def _draw_detail(self, ctx: Any, layer: Any, x: int, y: int, width: int, plan: dict[str, Any]) -> None:
+        """绘制 YouTube 操作栏与评论输入槽。"""
         m = ctx.m
         surface.hairline(layer, x, y + m.gap_sm, x + width, ctx.hair)
         top = y + int(plan["head"])
         bar_h = int(plan["bar_h"])
-        own_row = bool(plan.get("own_row"))
-
-        if plan["show_pill"] and not own_row:
+        if plan["show_pill"]:
             pill_h = int(plan["pill_h"])
             self._draw_hint_pill(
                 ctx, layer, x, top + max(0, (bar_h - pill_h) // 2), int(plan["pill_w"]), plan
@@ -2902,30 +2486,12 @@ class FooterBlock(Block):
 
         actions = plan["actions"]
         if actions:
-            if plan.get("spread") and len(actions) > 1:
-                # 均匀铺满：首枚贴左、末枚贴右，中间等距。用「末枚列宽」抵掉
-                # 右侧溢出，所以整排刚好落在 [x, x + width) 内。
-                span = max(1, width - int(actions[-1]["col"]))
-                steps = len(actions) - 1
-                for index, item in enumerate(actions):
-                    left = x + int(round(index * span / steps))
-                    self._draw_action(ctx, layer, item, left, top, plan, bar_h)
-            else:
-                cursor = x + width - int(plan["actions_w"])
-                for index, item in enumerate(actions):
-                    if index:
-                        cursor += int(plan["act_gap"])
-                    self._draw_action(ctx, layer, item, cursor, top, plan, bar_h)
-                    cursor += int(item["col"])
-
-        cursor_y = top + bar_h
-        if plan.get("rule_below"):
-            surface.hairline(layer, x, cursor_y + int(plan["rule_gap"]), x + width, ctx.hair)
-            cursor_y += int(plan["rule_h"])
-        if plan["show_pill"] and own_row:
-            self._draw_hint_pill(
-                ctx, layer, x, cursor_y + int(plan["pill_gap"]), int(plan["pill_w"]), plan
-            )
+            cursor = x + width - int(plan["actions_w"])
+            for index, item in enumerate(actions):
+                if index:
+                    cursor += int(plan["act_gap"])
+                self._draw_action(ctx, layer, item, cursor, top, plan, bar_h)
+                cursor += int(item["col"])
 
     def draw(self, ctx: Any, layer: Any, x: int, y: int, width: int) -> None:
         m = ctx.m
@@ -2936,8 +2502,8 @@ class FooterBlock(Block):
         inner_w = plan["inner_w"]
         ty = y + plan["offset_y"]
 
-        if self.variant == "bili":
-            self._draw_bili(ctx, layer, x, y, width, plan)
+        if self.variant == "detail":
+            self._draw_detail(ctx, layer, x, y, width, plan)
             return
 
         if self.variant == "plate":
@@ -3089,10 +2655,8 @@ class ImmersiveHeroBlock(Block):
         if model.duration_text:
             _corner_tag(ctx, layer, (x, y + m.gap_lg + m.chip_h, x + width - m.pad + m.gap_xs, y + m.gap_lg + m.chip_h * 2), model.duration_text)
 
-        if ctx.theme.eyebrow == "bili_top":
-            # 沉浸布局吃掉了顶栏，而 B 站皮肤的链接与署名本来就挂在顶栏右上角。
-            # 这里把它补回 hero 右上角的压暗区（上方 scrim 保证可读），
-            # 免得这两条信息在 immersive + bilibili 的组合里凭空消失。
+        if ctx.theme.eyebrow == "detail_top":
+            # 沉浸布局吃掉了顶栏；在 hero 右上角补回低调的链接与署名。
             credit_f = ctx.font(_credit_font_size(ctx))
             credit = _corner_credit(ctx, credit_f, _credit_budget(width))
             if credit:
@@ -3183,7 +2747,6 @@ __all__ = [
     "RuleBlock",
     "SpacerBlock",
     "StatsBlock",
-    "TabBarBlock",
     "WarningBlock",
     "_stack_draw",
     "_stack_height",

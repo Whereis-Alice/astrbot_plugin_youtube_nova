@@ -1,7 +1,6 @@
-"""解析卡片渲染兼容层。
+"""解析卡片渲染入口。
 
-真正的排版与绘制逻辑位于 youtube_core.card 设计系统，本模块只保留历史
-公开 API（ShareCardRenderer 与若干模块级工具函数），负责：
+真正的排版与绘制逻辑位于 youtube_core.card 设计系统，本模块负责：
 
 1. 参数归一（主题 / 布局 / 风格别名，含 v1.4 及更早的旧配置值）；
 2. 缓存路径计算（样式版本 + 全部影响视觉的参数）；
@@ -16,21 +15,15 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 from ..card import (
     AUTO_THEME_KEY,
     LAYOUT_KEYS,
-    PLATFORM_ACCENTS,
     THEME_KEYS,
-    TypeSetter,
     build_model,
-    clean_text,
     is_auto_theme,
-    limit_chars,
-    parse_stats,
     render_card_image,
     resolve_layout_key,
     resolve_mode,
@@ -51,7 +44,8 @@ DEFAULT_WATERMARK_TAG = "Nova解析"
 #: 卡片样式版本：视觉变化时必须 +1，否则用户侧已缓存的旧卡片不会重新渲染。
 #: 19 = 全新 youtube_core.card 设计系统（主题 / 布局 / 深浅色三者全部生效）。
 #: 25 = 修复「跟随平台」被提前归一成极光；通用皮肤眉标去掉平台徽章与类型标签。
-_CARD_STYLE_VERSION = "25"
+#: 26 = 独立插件移除 B 站/X 结构，六套皮肤统一为 YouTube 内容语义。
+_CARD_STYLE_VERSION = "26"
 
 #: 布局与风格枚举（直接取自设计系统，避免两处枚举漂移）
 LAYOUT_NAMES: tuple[str, ...] = LAYOUT_KEYS
@@ -59,38 +53,6 @@ SKIN_NAMES: tuple[str, ...] = THEME_KEYS
 
 #: 封面下载失败时的内置兜底背景图
 _FALLBACK_BG_PATH = Path(__file__).resolve().parent / "assets" / "fallback_nova.png"
-
-#: 平台品牌色（历史 API，设计系统内部已改用 PLATFORM_ACCENTS）
-PLATFORM_COLORS: dict[str, str] = dict(PLATFORM_ACCENTS)
-
-
-# ============================ 模块级工具（历史 API） ============================
-
-
-def strip_emoji(text: Optional[str]) -> str:
-    """移除 emoji 并做 NFKC 归一化，避免字体缺字渲染成方块。"""
-    return clean_text(text)
-
-
-def parse_stats_line(stats_line: Optional[str]) -> list[tuple[str, str]]:
-    """将类似「👍 1.2万 🪙 8千」的统计行解析为 (标签, 数值) 列表。"""
-    return parse_stats(stats_line)
-
-
-def card_footer_url(result: Any) -> str:
-    """返回完整原始链接，协议、路径、查询参数和片段均不省略。"""
-    return str(getattr(result, "url", None) or "").strip()
-
-
-def format_timestamp(ts: Optional[int]) -> Optional[str]:
-    """卡片脚注用的短时间戳（月-日 时:分）；无法格式化时返回 None。"""
-    if ts is None:
-        return None
-    try:
-        return datetime.fromtimestamp(ts).strftime("%m-%d %H:%M")
-    except (OverflowError, OSError, ValueError):
-        return None
-
 
 # ============================ 渲染器 ============================
 
@@ -138,7 +100,6 @@ class ShareCardRenderer:
         except (TypeError, ValueError):
             comment_limit = 180
         self.hot_comment_max_chars = max(60, min(600, comment_limit or 180))
-        self._typesetter = TypeSetter(font_path=font_path)
 
     # ---------- 对外入口 ----------
 
@@ -301,75 +262,9 @@ class ShareCardRenderer:
         image.save(out_path)
         return out_path
 
-    # ---------- 兼容用文本工具 ----------
-
-    def _font(self, size: int, bold: bool = False) -> Any:
-        return self._typesetter.font(size, bold)
-
-    def _text_width(self, text: str, font: Any) -> int:
-        return self._typesetter.width(text, font)
-
-    def _wrap(self, text: str, font: Any, max_width: int) -> list[str]:
-        return self._typesetter.wrap(text, font, max_width)
-
-    def _fit_lines(
-        self, text: str, font: Any, max_width: int, max_lines: int
-    ) -> list[str]:
-        return self._typesetter.fit(text, font, max_width, max_lines)
-
-    @staticmethod
-    def _limit_text(text: str, max_chars: int) -> str:
-        return limit_chars(text, max_chars)
-
-    def _draw_text(
-        self,
-        draw: Any,
-        xy: tuple[int, int],
-        text: str,
-        size: int,
-        fill: Any,
-        bold: bool = False,
-    ) -> None:
-        font = self._typesetter.font(size, bold)
-        self._typesetter.draw_line(draw, xy, text, font, fill, bold=bold)
-
-    def _normalized_card_comments(self, result: ParseResult) -> list[dict[str, Any]]:
-        """把 extra 里的 hot_comments 归一为卡片可直接使用的字段。"""
-        extra = getattr(result, "extra", {}) or {}
-        comments = extra.get("hot_comments")
-        if not isinstance(comments, list):
-            return []
-        normalized: list[dict[str, Any]] = []
-        for item in comments[:5]:
-            if not isinstance(item, dict):
-                continue
-            message = limit_chars(
-                clean_text(str(item.get("message") or "")),
-                self.hot_comment_max_chars,
-            )
-            if not message:
-                continue
-            normalized.append(
-                {
-                    "username": clean_text(str(item.get("username") or "未知用户")),
-                    "uid": clean_text(str(item.get("uid") or "")),
-                    "likes": item.get("likes", 0),
-                    "likes_text": clean_text(str(item.get("likes_text") or "")),
-                    "time": clean_text(str(item.get("time") or "")),
-                    "message": message,
-                }
-            )
-        return normalized
-
-
 __all__ = [
     "DEFAULT_WATERMARK_TAG",
     "LAYOUT_NAMES",
-    "PLATFORM_COLORS",
     "SKIN_NAMES",
     "ShareCardRenderer",
-    "card_footer_url",
-    "format_timestamp",
-    "parse_stats_line",
-    "strip_emoji",
 ]

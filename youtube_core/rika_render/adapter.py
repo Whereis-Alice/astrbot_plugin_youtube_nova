@@ -13,21 +13,6 @@ from typing import Any, Dict, List, Optional
 from .data import Author, ImageContent, ParseResult, Platform, VideoContent
 from .task import PathTask
 
-PLATFORM_DISPLAY_NAMES: Dict[str, str] = {
-    "bilibili": "哔哩哔哩",
-    "douyin": "抖音",
-    "kuaishou": "快手",
-    "weibo": "微博",
-    "xiaohongshu": "小红书",
-    "twitter": "推特",
-    "tiktok": "TikTok",
-    "pixiv": "Pixiv",
-    "toutiao": "今日头条",
-    "xianyu": "闲鱼",
-    "xiaoheihe": "小黑盒",
-    "youtube": "YouTube",
-}
-
 _AUTHOR_IDENTIFIER_RE = re.compile(
     r"^(?P<name>.+?)\s*\((?P<identifier>@[^()]+|uid:[^()]+)\)$",
     re.I,
@@ -134,11 +119,7 @@ def build_parse_result(
     save_dir: Optional[Path] = None,
 ) -> ParseResult:
     """把 yaya 的 MediaMetadata 转为 rika 的 ParseResult。"""
-    platform_name = str(metadata.get("platform") or "").strip().lower() or "website"
-    platform = Platform(
-        name=platform_name,
-        display_name=PLATFORM_DISPLAY_NAMES.get(platform_name, platform_name),
-    )
+    platform = Platform(name="youtube", display_name="YouTube")
 
     save_path = Path(save_dir) if save_dir else Path(
         str(metadata.get("_render_save_dir") or ".")

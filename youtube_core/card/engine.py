@@ -53,7 +53,7 @@ WARN_DARK: RGB = (255, 186, 84)
 WARN_LIGHT: RGB = (176, 96, 12)
 
 #: 这些区块总是横跨整幅，不进杂志布局的侧栏
-FULL_WIDTH_TAIL = ("ipnote", "tabbar", "warnings", "comments", "footer")
+FULL_WIDTH_TAIL = ("ipnote", "warnings", "comments", "footer")
 
 
 # ============================ 渲染上下文 ============================
@@ -361,8 +361,6 @@ def _make_block(name: str, theme: ThemeRecipe, layout: LayoutPreset, headline_sc
         return blk.StatsBlock(variant=theme.stats)
     if name == "ipnote":
         return blk.IpNoteBlock()
-    if name == "tabbar":
-        return blk.TabBarBlock()
     if name == "quote":
         return blk.QuoteBlock(variant="quote" if theme.panel == "none" else "panel")
     if name == "warnings":
@@ -441,7 +439,7 @@ def build_context(
     mode = resolve_mode(mode)
     metrics = build_metrics(width, layout.density or theme.density)
     if theme.radius_scale != 1.0:
-        # 仿站点视觉的主题用它还原对方的圆角语言（例如哔哩哔哩的小圆角）
+        # 仿站点视觉的主题用它还原对应产品的圆角语言。
         scale = max(0.05, float(theme.radius_scale))
         metrics = replace(
             metrics,

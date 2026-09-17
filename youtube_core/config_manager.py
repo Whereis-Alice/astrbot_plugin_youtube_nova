@@ -93,10 +93,8 @@ CARD_SKIN_BROADSHEET = "broadsheet"
 CARD_SKIN_TELEMETRY = "telemetry"
 CARD_SKIN_GALLERY = "gallery"
 CARD_SKIN_NOCTURNE = "nocturne"
-CARD_SKIN_BILIBILI = "bilibili"
-CARD_SKIN_X = "x"
 CARD_SKIN_YOUTUBE = "youtube"
-#: 「跟随平台」哨兵：不是一套真皮肤，渲染时按来源站点现场挑仿站皮肤
+#: 「跟随平台」哨兵：本插件只解析 YouTube，渲染时落到 YouTube 皮肤。
 CARD_SKIN_AUTO = "auto"
 DEFAULT_CARD_SKIN = CARD_SKIN_AURORA
 CARD_SKINS: Dict[str, str] = {
@@ -105,8 +103,6 @@ CARD_SKINS: Dict[str, str] = {
     CARD_SKIN_TELEMETRY: "测控",
     CARD_SKIN_GALLERY: "展陈",
     CARD_SKIN_NOCTURNE: "夜曲",
-    CARD_SKIN_BILIBILI: "哔哩哔哩",
-    CARD_SKIN_X: "X（推特）",
     CARD_SKIN_YOUTUBE: "YouTube",
     CARD_SKIN_AUTO: "跟随平台",
 }
@@ -134,8 +130,9 @@ LEGACY_CARD_SKIN_VALUES: Dict[str, str] = {
     "数据终端": CARD_SKIN_TELEMETRY,
     "档案海报": CARD_SKIN_GALLERY,
     "霓虹风格": CARD_SKIN_NOCTURNE,
-    "b站卡片": CARD_SKIN_BILIBILI,
-    "推特卡片": CARD_SKIN_X,
+    # 独立插件早期误带的跨平台皮肤统一迁移到 YouTube 观看页皮肤。
+    "b站卡片": CARD_SKIN_YOUTUBE,
+    "推特卡片": CARD_SKIN_YOUTUBE,
     "油管卡片": CARD_SKIN_YOUTUBE,
 }
 #: theme.LAYOUT_ALIASES 未收录的旧布局选项（v1.4 schema 里的“信息流”）。
@@ -475,7 +472,6 @@ class YouTubeConfig:
     browser_wakeup_mode: str = "off"
     browser_wakeup_timeout_seconds: int = 30
     max_height: int = 1080
-    player_clients: str = "ios,android_vr"
     total_budget_seconds: int = 45
     allow_dash: bool = True
     notify_admin_on_cookie_expired: bool = True
@@ -483,13 +479,11 @@ class YouTubeConfig:
     cookie_auto_refresh: bool = True
     cookie_keepalive_hours: int = 6
     cookie_runtime_file: str = ""
-    ytdlp_fallback: bool = True
     ytdlp_js_runtime: str = "auto"
     ytdlp_timeout: int = 60
     ytdlp_runtime_dir: str = ""
     ytdlp_pot_provider: str = ""
     ytdlp_fetch_pot: str = "auto"
-    stream_source: str = "auto"
 
 
 @dataclass
@@ -1072,10 +1066,6 @@ class ConfigManager:
             max_height=self._parse_youtube_max_height(
                 youtube_raw.get("max_height", "1080")
             ),
-            player_clients=str(
-                youtube_raw.get("player_clients", "")
-                or "ios,android_vr"
-            ).strip(),
             total_budget_seconds=max(
                 8,
                 self._parse_non_negative_int(
@@ -1113,11 +1103,6 @@ class ConfigManager:
                     and youtube_cookie_auto_refresh
                 ),
             ),
-            ytdlp_fallback=self._parse_bool(
-                youtube_raw.get("ytdlp_fallback", True),
-                True,
-                "youtube.ytdlp_fallback",
-            ),
             ytdlp_js_runtime=(
                 str(youtube_raw.get("ytdlp_js_runtime", "") or "auto")
                 .strip()
@@ -1142,9 +1127,6 @@ class ConfigManager:
             ).strip(),
             ytdlp_fetch_pot=self._parse_fetch_pot(
                 youtube_raw.get("ytdlp_fetch_pot", "")
-            ),
-            stream_source=self._parse_stream_source(
-                youtube_raw.get("stream_source", "")
             ),
         )
 
@@ -1228,7 +1210,6 @@ class ConfigManager:
                 cookie=self.youtube.cookie,
                 proxy=proxy_addr if self.proxy.youtube_use_proxy else None,
                 max_height=self.youtube.max_height,
-                player_clients=self.youtube.player_clients,
                 hot_comment_count=youtube_hc,
                 total_budget_seconds=self.youtube.total_budget_seconds,
                 allow_dash=self.youtube.allow_dash,
@@ -1255,13 +1236,11 @@ class ConfigManager:
                 browser_cookie_wakeup_timeout_seconds=(
                     self.youtube.browser_wakeup_timeout_seconds
                 ),
-                ytdlp_fallback=self.youtube.ytdlp_fallback,
                 ytdlp_js_runtime=self.youtube.ytdlp_js_runtime,
                 ytdlp_timeout=self.youtube.ytdlp_timeout,
                 ytdlp_cookie_dir=self.youtube.ytdlp_runtime_dir,
                 ytdlp_pot_provider=self.youtube.ytdlp_pot_provider,
                 ytdlp_fetch_pot=self.youtube.ytdlp_fetch_pot,
-                stream_source=self.youtube.stream_source,
                 send_video_max_mb=self.download.send_video_max_mb,
             )
             parsers.append(self.youtube_parser)
@@ -1294,7 +1273,7 @@ class ConfigManager:
 
     @staticmethod
     def _build_youtube_runtime_dir(cache_dir: str, enabled: bool) -> str:
-        """给 YouTube 兜底链路（yt-dlp 的 Cookie jar）挑一个可写目录。
+        """给 YouTube 取流器（yt-dlp 的 Cookie jar）挑一个可写目录。
 
         目录不可用时返回空串，届时 jar 落到系统临时目录，功能不受影响。
         """
@@ -1385,7 +1364,7 @@ class ConfigManager:
 
     @staticmethod
     def _parse_card_skin(value) -> str:
-        """把任意历史 / 中文 / 英文皮肤写法归一到 8 个皮肤 key 或 auto。"""
+        """把任意历史 / 中文 / 英文皮肤写法归一到 6 个皮肤 key 或 auto。"""
         raw = str(value or "").strip()
         if not raw:
             return DEFAULT_CARD_SKIN
@@ -1399,7 +1378,7 @@ class ConfigManager:
             lowered = raw.lower()
             return lowered if lowered in CARD_SKINS else DEFAULT_CARD_SKIN
         if is_auto_theme(raw):
-            # 「跟随平台」要原样留到渲染期，那时才知道链接来自哪个站点
+            # 保留哨兵到渲染期，由 YouTube 卡片层统一处理。
             return CARD_SKIN_AUTO
         return resolve_theme_key(raw)
 
@@ -1531,26 +1510,6 @@ class ConfigManager:
             "headless": "headless",
         }
         return mapping.get(text, "off")
-
-    @staticmethod
-    def _parse_stream_source(value) -> str:
-        """把取流来源配置归一成解析器认得的英文枚举值。
-
-        WebUI 里给的是中文选项，非法值一律回落 auto——这一项只影响取流路径
-        的选择顺序，不该因为拼错就让整份配置解析失败。
-        """
-        text = str(value or "").strip().lower()
-        mapping = {
-            "自动": "auto",
-            "auto": "auto",
-            "优先官方接口": "innertube",
-            "innertube": "innertube",
-            "仅 yt-dlp": "ytdlp_only",
-            "仅yt-dlp": "ytdlp_only",
-            "ytdlp_only": "ytdlp_only",
-            "ytdlp-only": "ytdlp_only",
-        }
-        return mapping.get(text, "auto")
 
     @staticmethod
     def _parse_fetch_pot(value) -> str:

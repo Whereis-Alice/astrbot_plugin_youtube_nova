@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from youtube_core.config_manager import ConfigManager
+from youtube_core.storage.parse_record import ParseRecordManager
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,3 +53,32 @@ def test_schema_exposes_no_other_platform_parser_or_proxy() -> None:
         "show_in_text",
         "youtube",
     }
+
+
+def test_schema_exposes_only_the_ytdlp_stream_route() -> None:
+    schema = json.loads((ROOT / "_conf_schema.json").read_text("utf-8"))
+    youtube_items = schema["youtube"]["items"]
+
+    assert "stream_source" not in youtube_items
+    assert "player_clients" not in youtube_items
+    assert "ytdlp_fallback" not in youtube_items
+    assert "ytdlp_timeout" in youtube_items
+
+
+def test_legacy_platform_skins_migrate_to_youtube() -> None:
+    for legacy in ("B站卡片", "推特卡片", "哔哩哔哩", "twitter"):
+        config = ConfigManager(
+            {"message": {"card_render": {"skin": legacy}}}
+        )
+        assert config.message.card_render.skin == "youtube"
+
+
+def test_youtube_share_parameters_do_not_bypass_link_rate_limit() -> None:
+    first = ParseRecordManager.canonicalize_url(
+        "https://youtu.be/dQw4w9WgXcQ?si=first&t=42"
+    )
+    second = ParseRecordManager.canonicalize_url(
+        "https://youtu.be/dQw4w9WgXcQ?si=second"
+    )
+
+    assert first == second == "https://youtu.be/dQw4w9WgXcQ"

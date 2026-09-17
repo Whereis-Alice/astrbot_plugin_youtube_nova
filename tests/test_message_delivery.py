@@ -297,7 +297,7 @@ class CardOnlyNoticeTests(unittest.TestCase):
 
 
 class TextNodeAccessMessageTests(unittest.TestCase):
-    """限制说明的标签归属：B站讲时长，YouTube 讲原因。"""
+    """YouTube 限制说明与真实时长分开展示。"""
 
     GATE = "被 YouTube 机器人验证挡下，仅展示封面与信息"
 
@@ -322,14 +322,3 @@ class TextNodeAccessMessageTests(unittest.TestCase):
         text = self._text(access_status="gated", access_message=self.GATE)
         self.assertIn("提示：" + self.GATE, text)
         self.assertNotIn("时长：", text)
-
-    def test_partial_access_keeps_duration_label(self):
-        message = "可解析 03:00 / 全长 10:00"
-        text = self._text(
-            access_status="preview",
-            access_message=message,
-            available_length_ms=180000,
-            timelength_ms=600000,
-        )
-        self.assertIn("时长：" + message, text)
-        self.assertNotIn("提示：", text)

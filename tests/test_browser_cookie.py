@@ -243,7 +243,9 @@ def test_parser_syncs_browser_snapshot_into_innertube_runtime() -> None:
     assert "已鉴权" in detail
     assert parser.cookie_authenticated is True
     assert parser.cookie_runtime.header() == "SAPISID=fresh; SID=session"
-    assert "tv" in parser.player_clients
+    assert parser._innertube_headers("tv_simply")["Cookie"] == (
+        "SAPISID=fresh; SID=session"
+    )
     assert parser._login_label(False) == "browser(已鉴权)"
 
 

@@ -99,22 +99,7 @@ def ensure_contrast(
 # ============================ 平台强调色 ============================
 
 PLATFORM_ACCENTS: dict[str, str] = {
-    "bilibili": "#FB7299",
-    "douyin": "#22E6DD",
-    "kuaishou": "#FF7E00",
-    "weibo": "#FF8200",
-    "xiaohongshu": "#FF2442",
-    "twitter": "#4FA6F0",
-    "x": "#4FA6F0",
-    "pixiv": "#31A6F2",
-    "xianyu": "#FFC300",
-    "toutiao": "#F04142",
-    "xiaoheihe": "#4E7EF2",
-    "tiktok": "#22E6DD",
-    "acfun": "#FD4C5D",
-    "nga": "#66C0F4",
     "youtube": "#FF4E45",
-    "website": "#7C8CF8",
     "default": "#7C8CF8",
 }
 
@@ -398,121 +383,6 @@ NOCTURNE_LIGHT = _palette(
     shadow_alpha=58,
 )
 
-# --- 哔哩哔哩 bilibili：仿 B 站站点视觉（浅色为主，深色为官方暗色模式） ---
-# 取色自 B 站设计规范：粉 #FB7299 / 蓝 #00AEEC / 文字 #18191C-#61666D-#9499A0
-# 浅色页底 #F1F2F3、卡片纯白、分割线 #E3E5E7；深色页底 #17181A、卡片 #1F2022、分割线 #2F3134
-
-BILIBILI_LIGHT = _palette(
-    "light",
-    backdrop_a=hex_to_rgb("#F1F2F3"),
-    backdrop_b=hex_to_rgb("#E9EAEC"),
-    bloom=hex_to_rgb("#FB7299"),
-    bloom_alpha=0,
-    surface=hex_to_rgb("#FFFFFF"),
-    surface_alpha=255,
-    surface_border=hex_to_rgb("#E3E5E7"),
-    surface_border_alpha=255,
-    ink=hex_to_rgb("#18191C"),
-    ink_dim=hex_to_rgb("#61666D"),
-    ink_muted=hex_to_rgb("#9499A0"),
-    hairline=hex_to_rgb("#E3E5E7"),
-    hairline_alpha=255,
-    media_mat=hex_to_rgb("#F1F2F3"),
-    media_edge=hex_to_rgb("#E3E5E7"),
-    media_edge_alpha=255,
-    grain_alpha=0,
-    shadow_alpha=30,
-    accent_ink=(255, 255, 255),
-    accent_wash=26,
-)
-
-BILIBILI_DARK = _palette(
-    "dark",
-    backdrop_a=hex_to_rgb("#17181A"),
-    backdrop_b=hex_to_rgb("#131416"),
-    bloom=hex_to_rgb("#FB7299"),
-    bloom_alpha=0,
-    surface=hex_to_rgb("#2F3134"),
-    surface_alpha=255,
-    surface_border=hex_to_rgb("#3B3E43"),
-    surface_border_alpha=255,
-    ink=hex_to_rgb("#E3E5E7"),
-    ink_dim=hex_to_rgb("#A2A7AE"),
-    ink_muted=hex_to_rgb("#787D85"),
-    hairline=hex_to_rgb("#3B3E43"),
-    hairline_alpha=255,
-    media_mat=hex_to_rgb("#1B1C1F"),
-    media_edge=hex_to_rgb("#3B3E43"),
-    media_edge_alpha=255,
-    grain_alpha=0,
-    shadow_alpha=96,
-    accent_ink=(255, 255, 255),
-    accent_wash=30,
-)
-
-# 哔哩哔哩品牌辅助色：页脚链接 / 次级强调
-BILIBILI_BLUE = hex_to_rgb("#00AEEC")
-BILIBILI_PINK = hex_to_rgb("#FB7299")
-
-
-# --- X（推特）x：仿 X 移动端贴文详情页 ---
-# 取色自 X 官方设计令牌：蓝 #1D9BF0 / 赞粉 #F91880 / 转推绿 #00BA7C
-# 深色为 X 的「熄灯」模式：页底纯黑 #000000、卡面 #16181C、分割线 #2F3336
-# 浅色页底纯白、卡面 #F7F9F9、分割线 #EFF3F4、次要文字 #536471
-
-X_LIGHT = _palette(
-    "light",
-    backdrop_a=hex_to_rgb("#FFFFFF"),
-    backdrop_b=hex_to_rgb("#F7F9F9"),
-    bloom=hex_to_rgb("#1D9BF0"),
-    bloom_alpha=0,
-    surface=hex_to_rgb("#FFFFFF"),
-    surface_alpha=255,
-    surface_border=hex_to_rgb("#EFF3F4"),
-    surface_border_alpha=255,
-    ink=hex_to_rgb("#0F1419"),
-    ink_dim=hex_to_rgb("#536471"),
-    ink_muted=hex_to_rgb("#8B98A5"),
-    hairline=hex_to_rgb("#EFF3F4"),
-    hairline_alpha=255,
-    media_mat=hex_to_rgb("#F7F9F9"),
-    media_edge=hex_to_rgb("#EFF3F4"),
-    media_edge_alpha=255,
-    grain_alpha=0,
-    shadow_alpha=22,
-    accent_ink=(255, 255, 255),
-    accent_wash=24,
-)
-
-X_DARK = _palette(
-    "dark",
-    backdrop_a=hex_to_rgb("#000000"),
-    backdrop_b=hex_to_rgb("#000000"),
-    bloom=hex_to_rgb("#1D9BF0"),
-    bloom_alpha=0,
-    surface=hex_to_rgb("#16181C"),
-    surface_alpha=255,
-    surface_border=hex_to_rgb("#2F3336"),
-    surface_border_alpha=255,
-    ink=hex_to_rgb("#E7E9EA"),
-    ink_dim=hex_to_rgb("#8B98A5"),
-    ink_muted=hex_to_rgb("#71767B"),
-    hairline=hex_to_rgb("#2F3336"),
-    hairline_alpha=255,
-    media_mat=hex_to_rgb("#0B0C0D"),
-    media_edge=hex_to_rgb("#2F3336"),
-    media_edge_alpha=255,
-    grain_alpha=0,
-    shadow_alpha=110,
-    accent_ink=(255, 255, 255),
-    accent_wash=30,
-)
-
-# X 品牌辅助色
-X_BLUE = hex_to_rgb("#1D9BF0")
-X_LIKE_PINK = hex_to_rgb("#F91880")
-X_REPOST_GREEN = hex_to_rgb("#00BA7C")
-
 # --- YouTube yt：仿 YouTube 观看页 ---
 # 深色为 YouTube 暗色主题：页底 #0F0F0F、卡面 #1F1F1F、分割线 #303030、
 # 次要文字 #AAAAAA；浅色页底纯白、卡面 #F9F9F9、分割线 #E5E5E5。
@@ -577,11 +447,7 @@ PALETTES: dict[str, dict[str, Palette]] = {
     "telemetry": {"dark": TELEMETRY_DARK, "light": TELEMETRY_LIGHT},
     "gallery": {"dark": GALLERY_DARK, "light": GALLERY_LIGHT},
     "nocturne": {"dark": NOCTURNE_DARK, "light": NOCTURNE_LIGHT},
-    "bilibili": {"dark": BILIBILI_DARK, "light": BILIBILI_LIGHT},
-    "x": {"dark": X_DARK, "light": X_LIGHT},
     "youtube": {"dark": YOUTUBE_DARK, "light": YOUTUBE_LIGHT},
-    # 兼容旧键：任何配置里残留的 stream 都落到哔哩哔哩配色
-    "stream": {"dark": BILIBILI_DARK, "light": BILIBILI_LIGHT},
 }
 
 

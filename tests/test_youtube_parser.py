@@ -1,6 +1,6 @@
 """YouTube 解析器的单元测试。
 
-只覆盖纯函数部分（URL 识别、媒体流挑选、Innertube 响应字段提取），
+覆盖 URL 识别、Innertube 元数据提取、yt-dlp 选流与解析器整合，
 样本按真实 player / next 响应裁剪，保留解析依赖的结构特征。
 """
 
@@ -11,17 +11,13 @@ import os
 import shutil
 import sys
 import tempfile
-import time
 import types
 import unittest
 from unittest import mock
 
 from youtube_core.parser.platform.youtube import (
-    COOKIE_PLAYER_CLIENTS,
-    DEFAULT_PLAYER_CLIENTS,
     INNERTUBE_CLIENTS,
     METADATA_PLAYER_CLIENTS,
-    STREAM_SOURCE_CHOICES,
     YouTubeParser,
     build_sapisid_authorization,
     build_youtube_stats_line,
@@ -38,8 +34,6 @@ from youtube_core.parser.platform.youtube import (
     parse_cookie_header,
     parse_watch_html,
     parse_youtube_identity,
-    select_youtube_media,
-    select_youtube_media_detailed,
     thumbnail_candidates,
 )
 from youtube_core.parser.platform.youtube import _Deadline
@@ -226,364 +220,6 @@ class ExtractLinksTest(unittest.TestCase):
     def test_ignores_non_youtube_text(self):
         self.assertEqual(extract_youtube_links("没有链接的一句话"), [])
         self.assertEqual(extract_youtube_links(""), [])
-
-
-def _fmt(**kwargs):
-    """构造一条 streamingData format。"""
-    return dict(kwargs)
-
-
-class SelectMediaTest(unittest.TestCase):
-    """streamingData → 下载地址。"""
-
-    def _player(self, progressive=None, adaptive=None, hls=None):
-        streaming = {}
-        if progressive is not None:
-            streaming["formats"] = progressive
-        if adaptive is not None:
-            streaming["adaptiveFormats"] = adaptive
-        if hls is not None:
-            streaming["hlsManifestUrl"] = hls
-        return {"streamingData": streaming}
-
-    def test_prefers_dash_pair_with_avc1_and_mp4a(self):
-        player = self._player(
-            progressive=[
-                _fmt(
-                    url="https://x/prog360",
-                    mimeType='video/mp4; codecs="avc1.42001E, mp4a.40.2"',
-                    height=360,
-                    bitrate=500,
-                ),
-            ],
-            adaptive=[
-                _fmt(
-                    url="https://x/vp9_1080",
-                    mimeType='video/webm; codecs="vp9"',
-                    height=1080,
-                    bitrate=4000,
-                ),
-                _fmt(
-                    url="https://x/avc_1080",
-                    mimeType='video/mp4; codecs="avc1.640028"',
-                    height=1080,
-                    bitrate=3500,
-                ),
-                _fmt(
-                    url="https://x/opus",
-                    mimeType='audio/webm; codecs="opus"',
-                    bitrate=130,
-                ),
-                _fmt(
-                    url="https://x/aac",
-                    mimeType='audio/mp4; codecs="mp4a.40.2"',
-                    bitrate=128,
-                ),
-            ],
-        )
-        url, kind, height = select_youtube_media(player, max_height=1080)
-        self.assertEqual(kind, "dash")
-        self.assertEqual(height, 1080)
-        self.assertEqual(url, "dash:https://x/avc_1080||https://x/aac")
-
-    def test_max_height_caps_selection(self):
-        player = self._player(
-            adaptive=[
-                _fmt(
-                    url="https://x/v1080",
-                    mimeType='video/mp4; codecs="avc1"',
-                    height=1080,
-                    bitrate=3500,
-                ),
-                _fmt(
-                    url="https://x/v720",
-                    mimeType='video/mp4; codecs="avc1"',
-                    height=720,
-                    bitrate=1800,
-                ),
-                _fmt(
-                    url="https://x/aac",
-                    mimeType='audio/mp4; codecs="mp4a.40.2"',
-                    bitrate=128,
-                ),
-            ],
-        )
-        url, kind, height = select_youtube_media(player, max_height=720)
-        self.assertEqual(kind, "dash")
-        self.assertEqual(height, 720)
-        self.assertIn("v720", url)
-
-    def test_skips_signature_cipher_streams(self):
-        player = self._player(
-            progressive=[
-                _fmt(
-                    signatureCipher="s=abc&url=https://x/blocked",
-                    mimeType='video/mp4; codecs="avc1, mp4a.40.2"',
-                    height=720,
-                ),
-                _fmt(
-                    url="https://x/plain360",
-                    mimeType='video/mp4; codecs="avc1, mp4a.40.2"',
-                    height=360,
-                    bitrate=500,
-                ),
-            ],
-        )
-        url, kind, height = select_youtube_media(player)
-        self.assertEqual(kind, "progressive")
-        self.assertEqual(url, "https://x/plain360")
-        self.assertEqual(height, 360)
-
-    def test_progressive_requires_audio_track(self):
-        player = self._player(
-            progressive=[
-                _fmt(
-                    url="https://x/mute720",
-                    mimeType='video/mp4; codecs="avc1.4d401f"',
-                    height=720,
-                    bitrate=1500,
-                ),
-            ],
-        )
-        url, kind, _height = select_youtube_media(player)
-        self.assertEqual(url, "")
-        self.assertEqual(kind, "none")
-
-    def test_allow_dash_off_falls_back_to_progressive(self):
-        player = self._player(
-            progressive=[
-                _fmt(
-                    url="https://x/prog720",
-                    mimeType='video/mp4; codecs="avc1, mp4a.40.2"',
-                    height=720,
-                    bitrate=1500,
-                ),
-            ],
-            adaptive=[
-                _fmt(
-                    url="https://x/v1080",
-                    mimeType='video/mp4; codecs="avc1"',
-                    height=1080,
-                    bitrate=3500,
-                ),
-                _fmt(
-                    url="https://x/aac",
-                    mimeType='audio/mp4; codecs="mp4a.40.2"',
-                    bitrate=128,
-                ),
-            ],
-        )
-        url, kind, height = select_youtube_media(player, allow_dash=False)
-        self.assertEqual(kind, "progressive")
-        self.assertEqual(url, "https://x/prog720")
-        self.assertEqual(height, 720)
-
-    def test_hls_used_for_live(self):
-        player = self._player(hls="https://x/master.m3u8")
-        url, kind, _height = select_youtube_media(player)
-        self.assertEqual(kind, "hls")
-        self.assertEqual(url, "m3u8:https://x/master.m3u8")
-
-    def test_video_only_is_last_resort(self):
-        player = self._player(
-            adaptive=[
-                _fmt(
-                    url="https://x/v480",
-                    mimeType='video/mp4; codecs="avc1"',
-                    height=480,
-                    bitrate=900,
-                ),
-            ],
-        )
-        url, kind, height = select_youtube_media(player)
-        self.assertEqual(kind, "video_only")
-        self.assertEqual(url, "https://x/v480")
-        self.assertEqual(height, 480)
-
-    def test_empty_payload_is_safe(self):
-        for payload in (None, {}, {"streamingData": None}, "junk"):
-            with self.subTest(payload=payload):
-                self.assertEqual(
-                    select_youtube_media(payload), ("", "none", 0)
-                )
-
-
-class SelectMediaBudgetTest(unittest.TestCase):
-    """可发送体积预算参与选流。"""
-
-    def _player(self, adaptive=None, progressive=None, length=0):
-        streaming = {}
-        if progressive is not None:
-            streaming["formats"] = progressive
-        if adaptive is not None:
-            streaming["adaptiveFormats"] = adaptive
-        player = {"streamingData": streaming}
-        if length:
-            player["videoDetails"] = {"lengthSeconds": str(length)}
-        return player
-
-    def test_picks_highest_quality_that_fits_budget(self):
-        player = self._player(
-            adaptive=[
-                _fmt(
-                    url="https://x/v1080",
-                    mimeType='video/mp4; codecs="avc1"',
-                    height=1080,
-                    bitrate=3500,
-                    contentLength=str(130 * 1024 * 1024),
-                ),
-                _fmt(
-                    url="https://x/v720",
-                    mimeType='video/mp4; codecs="avc1"',
-                    height=720,
-                    bitrate=1800,
-                    contentLength=str(60 * 1024 * 1024),
-                ),
-                _fmt(
-                    url="https://x/aac",
-                    mimeType='audio/mp4; codecs="mp4a.40.2"',
-                    bitrate=128,
-                    contentLength=str(3 * 1024 * 1024),
-                ),
-            ],
-        )
-        url, kind, height, size = select_youtube_media_detailed(
-            player, max_bytes=100 * 1024 * 1024
-        )
-        self.assertEqual(kind, "dash")
-        self.assertEqual(height, 720)
-        self.assertIn("v720", url)
-        self.assertEqual(size, 63 * 1024 * 1024)
-
-    def test_without_budget_still_picks_best_quality(self):
-        player = self._player(
-            adaptive=[
-                _fmt(
-                    url="https://x/v1080",
-                    mimeType='video/mp4; codecs="avc1"',
-                    height=1080,
-                    bitrate=3500,
-                    contentLength=str(130 * 1024 * 1024),
-                ),
-                _fmt(
-                    url="https://x/v720",
-                    mimeType='video/mp4; codecs="avc1"',
-                    height=720,
-                    bitrate=1800,
-                    contentLength=str(60 * 1024 * 1024),
-                ),
-                _fmt(
-                    url="https://x/aac",
-                    mimeType='audio/mp4; codecs="mp4a.40.2"',
-                    bitrate=128,
-                    contentLength=str(3 * 1024 * 1024),
-                ),
-            ],
-        )
-        url, kind, height, _size = select_youtube_media_detailed(player)
-        self.assertEqual(kind, "dash")
-        self.assertEqual(height, 1080)
-        self.assertIn("v1080", url)
-
-    def test_all_oversize_falls_back_to_smallest(self):
-        player = self._player(
-            adaptive=[
-                _fmt(
-                    url="https://x/v1080",
-                    mimeType='video/mp4; codecs="avc1"',
-                    height=1080,
-                    bitrate=3500,
-                    contentLength=str(400 * 1024 * 1024),
-                ),
-                _fmt(
-                    url="https://x/v480",
-                    mimeType='video/mp4; codecs="avc1"',
-                    height=480,
-                    bitrate=900,
-                    contentLength=str(200 * 1024 * 1024),
-                ),
-                _fmt(
-                    url="https://x/aac",
-                    mimeType='audio/mp4; codecs="mp4a.40.2"',
-                    bitrate=128,
-                    contentLength=str(2 * 1024 * 1024),
-                ),
-            ],
-        )
-        url, kind, height, size = select_youtube_media_detailed(
-            player, max_bytes=50 * 1024 * 1024
-        )
-        self.assertEqual(kind, "dash")
-        self.assertEqual(height, 480)
-        self.assertIn("v480", url)
-        self.assertEqual(size, 202 * 1024 * 1024)
-
-    def test_unknown_size_counts_as_fitting(self):
-        player = self._player(
-            adaptive=[
-                _fmt(
-                    url="https://x/v1080",
-                    mimeType='video/mp4; codecs="avc1"',
-                    height=1080,
-                ),
-                _fmt(
-                    url="https://x/aac",
-                    mimeType='audio/mp4; codecs="mp4a.40.2"',
-                ),
-            ],
-        )
-        url, kind, height, size = select_youtube_media_detailed(
-            player, max_bytes=1024
-        )
-        self.assertEqual(kind, "dash")
-        self.assertEqual(height, 1080)
-        self.assertIn("v1080", url)
-        self.assertEqual(size, 0)
-
-    def test_bitrate_and_length_estimate_drives_budget(self):
-        # 没有 contentLength 时用 averageBitrate × 时长折算：
-        # 8000000 bit/s × 120s / 8 ≈ 120MB，超过 100MB 预算。
-        player = self._player(
-            progressive=[
-                _fmt(
-                    url="https://x/big",
-                    mimeType='video/mp4; codecs="avc1, mp4a.40.2"',
-                    height=1080,
-                    averageBitrate=8_000_000,
-                ),
-                _fmt(
-                    url="https://x/small",
-                    mimeType='video/mp4; codecs="avc1, mp4a.40.2"',
-                    height=480,
-                    averageBitrate=1_000_000,
-                ),
-            ],
-            length=120,
-        )
-        url, kind, height, size = select_youtube_media_detailed(
-            player,
-            allow_dash=False,
-            max_bytes=100 * 1024 * 1024,
-        )
-        self.assertEqual(kind, "progressive")
-        self.assertEqual(height, 480)
-        self.assertIn("small", url)
-        self.assertEqual(size, 15_000_000)
-
-    def test_legacy_helper_keeps_three_tuple(self):
-        player = self._player(
-            progressive=[
-                _fmt(
-                    url="https://x/prog",
-                    mimeType='video/mp4; codecs="avc1, mp4a.40.2"',
-                    height=360,
-                ),
-            ],
-        )
-        self.assertEqual(
-            select_youtube_media(player),
-            ("https://x/prog", "progressive", 360),
-        )
 
 
 class NumberFormatTest(unittest.TestCase):
@@ -1002,26 +638,6 @@ class WatchHtmlTest(unittest.TestCase):
 class ParserWiringTest(unittest.TestCase):
     """解析器构造参数的归一化。"""
 
-    def test_client_list_normalization(self):
-        parser = YouTubeParser(player_clients="tv, ios ; web")
-        self.assertEqual(parser.player_clients, ("tv", "ios", "web"))
-
-    def test_unknown_clients_dropped_and_deduped(self):
-        parser = YouTubeParser(player_clients="ios,ios,android_bogus")
-        self.assertEqual(parser.player_clients, ("ios",))
-
-    def test_empty_client_list_falls_back_to_default(self):
-        for raw in ("", "   ", "nope", None, 123, []):
-            with self.subTest(raw=raw):
-                parser = YouTubeParser(player_clients=raw)
-                self.assertEqual(
-                    parser.player_clients, DEFAULT_PLAYER_CLIENTS
-                )
-
-    def test_list_input_accepted(self):
-        parser = YouTubeParser(player_clients=["WEB", "MWEB"])
-        self.assertEqual(parser.player_clients, ("web", "mweb"))
-
     def test_budget_has_floor(self):
         self.assertEqual(
             YouTubeParser(total_budget_seconds=1).total_budget_seconds, 8.0
@@ -1043,7 +659,7 @@ class ParserWiringTest(unittest.TestCase):
         self.assertEqual(YouTubeParser(max_height=-5).max_height, 0)
         self.assertEqual(YouTubeParser(max_height=720).max_height, 720)
 
-    # ── yt-dlp 兜底相关参数 ──────────────────────────────
+    # ── yt-dlp 取流参数 ──────────────────────────────────
 
     def test_ytdlp_timeout_has_floor(self):
         self.assertEqual(YouTubeParser(ytdlp_timeout=3).ytdlp_timeout, 10)
@@ -1059,11 +675,11 @@ class ParserWiringTest(unittest.TestCase):
             YouTubeParser(ytdlp_js_runtime=" node ").ytdlp_js_runtime, "node"
         )
 
-    def test_ytdlp_resolver_absent_when_disabled(self):
-        parser = YouTubeParser(ytdlp_fallback=False)
-        self.assertIsNone(parser._ytdlp_resolver())
-        # 关掉兜底时降级告警要提示用户存在这个开关。
-        self.assertIn("ytdlp_fallback", parser._ytdlp_advice())
+    def test_ytdlp_resolver_is_always_available(self):
+        parser = YouTubeParser()
+        resolver = parser._ytdlp_resolver()
+        self.assertIsInstance(resolver, YtDlpStreamResolver)
+        self.assertIs(parser._ytdlp_resolver(), resolver)
 
     def test_ytdlp_pot_settings_reach_the_resolver(self):
         parser = YouTubeParser(
@@ -1280,17 +896,9 @@ class CookieAuthTest(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(build_sapisid_authorization(raw or ""), "")
 
-    def test_native_clients_never_receive_credentials(self):
+    def test_metadata_clients_receive_credentials(self):
         parser = YouTubeParser(cookie=self.COOKIE)
-        for client in ("ios", "android_vr"):
-            with self.subTest(client=client):
-                headers = parser._innertube_headers(client)
-                self.assertNotIn("Cookie", headers)
-                self.assertNotIn("Authorization", headers)
-
-    def test_web_clients_receive_credentials(self):
-        parser = YouTubeParser(cookie=self.COOKIE)
-        for client in ("web", "mweb", "tv"):
+        for client in ("web", "tv_simply"):
             with self.subTest(client=client):
                 headers = parser._innertube_headers(client)
                 self.assertEqual(headers["Cookie"], self.COOKIE)
@@ -1307,69 +915,22 @@ class CookieAuthTest(unittest.TestCase):
         self.assertNotIn("Cookie", headers)
         self.assertNotIn("Authorization", headers)
 
-    def test_cookie_appends_auth_capable_clients(self):
-        parser = YouTubeParser(cookie=self.COOKIE)
-        self.assertEqual(
-            parser.player_clients,
-            DEFAULT_PLAYER_CLIENTS + COOKIE_PLAYER_CLIENTS,
-        )
-
-    def test_cookie_append_keeps_explicit_order_without_duplicates(self):
-        parser = YouTubeParser(cookie=self.COOKIE, player_clients="web,ios")
-        self.assertEqual(
-            parser.player_clients,
-            ("web", "ios", "tv_downgraded", "tv"),
-        )
-
-    def test_cookie_without_sapisid_changes_nothing(self):
+    def test_cookie_without_sapisid_is_anonymous(self):
         parser = YouTubeParser(cookie="SID=abc")
         self.assertFalse(parser.cookie_authenticated)
-        self.assertEqual(parser.player_clients, DEFAULT_PLAYER_CLIENTS)
-        self.assertNotIn("Cookie", parser._innertube_headers("ios"))
+        self.assertNotIn("Cookie", parser._innertube_headers("web"))
 
-    def test_dead_cookie_drops_the_auth_only_clients(self):
+    def test_dead_cookie_stops_sending_credentials(self):
         parser = YouTubeParser(cookie=self.COOKIE)
-        self.assertEqual(
-            parser.player_clients,
-            DEFAULT_PLAYER_CLIENTS + COOKIE_PLAYER_CLIENTS,
-        )
+        self.assertIn("Cookie", parser._innertube_headers("web"))
         parser.cookie_runtime.mark_dead("被判未登录")
-        self.assertEqual(parser.player_clients, DEFAULT_PLAYER_CLIENTS)
         self.assertNotIn("Cookie", parser._innertube_headers("web"))
         self.assertNotIn("Authorization", parser._innertube_headers("web"))
         self.assertIn("已判定失效", parser._login_label(False))
         parser.cookie_runtime.mark_alive()
         self.assertEqual(
-            parser.player_clients,
-            DEFAULT_PLAYER_CLIENTS + COOKIE_PLAYER_CLIENTS,
-        )
-        self.assertEqual(
             parser._innertube_headers("web")["Cookie"], self.COOKIE
         )
-
-    def test_dead_cookie_skips_auth_required_client_profiles(self):
-        parser = YouTubeParser(
-            cookie=self.COOKIE, player_clients="tv_downgraded"
-        )
-        self.assertIn("tv_downgraded", parser.player_clients)
-        parser.cookie_runtime.mark_dead("被判未登录")
-        self.assertTrue(
-            INNERTUBE_CLIENTS["tv_downgraded"].get("require_auth")
-        )
-    def test_default_clients_are_stream_capable_only(self):
-        for client in DEFAULT_PLAYER_CLIENTS:
-            with self.subTest(client=client):
-                self.assertTrue(INNERTUBE_CLIENTS[client]["media"])
-                self.assertFalse(INNERTUBE_CLIENTS[client]["cookies"])
-
-    def test_cookie_clients_all_support_cookies(self):
-        for client in COOKIE_PLAYER_CLIENTS:
-            with self.subTest(client=client):
-                self.assertTrue(INNERTUBE_CLIENTS[client]["cookies"])
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class CookieExpiryDetectionTest(unittest.TestCase):
@@ -1459,13 +1020,8 @@ class CookieExpiryDetectionTest(unittest.TestCase):
         self.assertEqual(authed._login_label(False), "cookie(已鉴权)")
         self.assertEqual(authed._login_label(True), "cookie(已失效)")
 
-    def test_client_chain_is_readable(self):
-        parser = YouTubeParser(player_clients="ios,android_vr")
-        self.assertEqual(parser._client_chain(), "ios > android_vr")
-
-
-class MetadataFallbackTest(unittest.TestCase):
-    """门禁吞掉 videoDetails 时的元数据兜底客户端。"""
+class MetadataClientTest(unittest.TestCase):
+    """Innertube 只使用独立的轻量元数据客户端。"""
 
     DETAILS = {
         "videoId": "2sm0UuaOm_s",
@@ -1483,16 +1039,13 @@ class MetadataFallbackTest(unittest.TestCase):
             )
         )
 
-    def test_metadata_clients_are_registered(self):
-        self.assertTrue(METADATA_PLAYER_CLIENTS)
-        for key in METADATA_PLAYER_CLIENTS:
-            with self.subTest(client=key):
-                self.assertIn(key, INNERTUBE_CLIENTS)
-                # 元数据客户端只用来补字段，不参与取流。
-                self.assertFalse(INNERTUBE_CLIENTS[key].get("media", False))
-                self.assertNotIn(key, DEFAULT_PLAYER_CLIENTS)
+    def test_only_metadata_and_next_clients_are_registered(self):
+        self.assertEqual(METADATA_PLAYER_CLIENTS, ("tv_simply",))
+        self.assertEqual(set(INNERTUBE_CLIENTS), {"tv_simply", "web"})
+        for profile in INNERTUBE_CLIENTS.values():
+            self.assertNotIn("media", profile)
 
-    def test_returns_first_payload_with_title(self):
+    def test_returns_tv_simply_payload_with_title(self):
         parser = YouTubeParser()
         calls = []
 
@@ -1506,7 +1059,7 @@ class MetadataFallbackTest(unittest.TestCase):
         self.assertEqual(player["videoDetails"]["lengthSeconds"], "84")
         self.assertEqual(failures, [])
         self.assertEqual(
-            calls, [("player", METADATA_PLAYER_CLIENTS[0], "2sm0UuaOm_s")]
+            calls, [("player", "tv_simply", "2sm0UuaOm_s")]
         )
 
     def test_missing_details_is_recorded_as_failure(self):
@@ -1518,8 +1071,8 @@ class MetadataFallbackTest(unittest.TestCase):
         parser._post_innertube = fake_post
         failures = []
         self.assertEqual(self._run(parser, failures), {})
-        self.assertEqual(len(failures), len(METADATA_PLAYER_CLIENTS))
-        self.assertIn("元数据", failures[0])
+        self.assertEqual(len(failures), 1)
+        self.assertIn("tv_simply(元数据)", failures[0])
 
     def test_exception_is_recorded_and_swallowed(self):
         parser = YouTubeParser()
@@ -1531,22 +1084,6 @@ class MetadataFallbackTest(unittest.TestCase):
         failures = []
         self.assertEqual(self._run(parser, failures), {})
         self.assertIn("RuntimeError: boom", failures[0])
-
-    def test_client_already_in_main_chain_is_skipped(self):
-        parser = YouTubeParser(
-            player_clients=",".join(METADATA_PLAYER_CLIENTS)
-        )
-        calls = []
-
-        async def fake_post(session, endpoint, client_key, body, deadline):
-            calls.append(client_key)
-            return {"videoDetails": dict(self.DETAILS)}
-
-        parser._post_innertube = fake_post
-        failures = []
-        self.assertEqual(self._run(parser, failures), {})
-        self.assertEqual(calls, [])
-        self.assertEqual(failures, [])
 
 
 class _FakeMultiHeaders:
@@ -2270,10 +1807,10 @@ class CookieInputNormalizationTest(unittest.TestCase):
         raw = " ".join((self.COLLAPSED_HEAD, "# nothing useful here"))
         self.assertEqual(parse_cookie_header(normalize_cookie_input(raw)), {})
 
-# ── yt-dlp 兜底运行时 ─────────────────────────────────────
+# ── yt-dlp 取流运行时 ─────────────────────────────────────
 #
 # YouTube 现在给 Web 端下发的基本都是 SABR 流与带签名挑战的流，Innertube
-# 直取路径拿不到直链，只能借 yt-dlp 执行播放器 JS 兜底。这一组测试全部离线
+# 当前流需要 yt-dlp 执行播放器 JS 才能还原。这一组测试全部离线
 # 进行：环境探测被 mock，extract_info 用裁剪过的真实结构替代。
 
 
@@ -2361,7 +1898,7 @@ class YtDlpEnvironmentTest(unittest.TestCase):
         self.assertIn("bgutil_http", summary)
 
     def test_missing_pot_provider_is_reported_but_still_ready(self):
-        # PO Token 提供方是可选增强件，缺它不该让兜底链路变成不可用。
+        # PO Token 提供方是可选增强件，缺它不该让基础取流链路不可用。
         env = _ytdlp_env()
         self.assertTrue(env.ready)
         self.assertIn("无 POT 提供方", env.summary())
@@ -2764,7 +2301,7 @@ class YtDlpCookieJarTest(unittest.TestCase):
 
     def test_jar_trimmed_by_ytdlp_is_restored(self):
         # 真实故障复现：yt-dlp 收工时按服务端的删除指令把登录核心 Cookie
-        # 从 jar 里抹掉并写回同一个文件，此后兜底解析永远按匿名跑。
+        # 从 jar 里抹掉并写回同一个文件，此后取流永远按匿名跑。
         path = self.resolver._ensure_cookie_jar(self.HEADER, 3)
         with open(path, "w", encoding="utf-8", newline="\n") as handle:
             handle.write(
@@ -3084,215 +2621,38 @@ class YtDlpResolveTest(unittest.TestCase):
         self.assertEqual(calls, [])
 
 
-class StreamSourcePlanTest(unittest.TestCase):
-    """取流策略：配置归一化、门禁连败冷却与 auto 档自适应切换。"""
+class YtDlpOnlyParseTest(unittest.TestCase):
+    """解析器只接受 yt-dlp 产出的媒体流，Innertube 只补信息。"""
 
-    def _parser(self, **kwargs):
-        parser = YouTubeParser(**kwargs)
-        # 计划阶段只关心「兜底链路可用」这个事实，不需要真的 yt-dlp。
-        parser._ytdlp = object()
-        return parser
-
-    def test_choices_cover_exactly_the_three_modes(self):
-        self.assertEqual(
-            set(STREAM_SOURCE_CHOICES),
-            {"auto", "innertube", "ytdlp_only"},
-        )
-
-    def test_stream_source_is_normalized(self):
-        cases = {
-            "auto": "auto",
-            " INNERTUBE ": "innertube",
-            "ytdlp_only": "ytdlp_only",
-            " YTDLP-ONLY ": "ytdlp_only",
-            "胡说": "auto",
-            "": "auto",
-            None: "auto",
-        }
-        for raw, expected in cases.items():
-            with self.subTest(raw=raw):
-                parser = YouTubeParser(stream_source=raw)
-                self.assertEqual(parser.stream_source, expected)
-
-    def test_auto_starts_from_innertube(self):
-        self.assertEqual(self._parser()._plan_stream_source(), "innertube")
-
-    def test_explicit_modes_are_honoured(self):
-        self.assertEqual(
-            self._parser(stream_source="innertube")._plan_stream_source(),
-            "innertube",
-        )
-        self.assertEqual(
-            self._parser(stream_source="ytdlp_only")._plan_stream_source(),
-            "ytdlp_only",
-        )
-
-    def test_ytdlp_only_falls_back_when_fallback_is_disabled(self):
-        parser = YouTubeParser(
-            stream_source="ytdlp_only", ytdlp_fallback=False
-        )
-        self.assertIsNone(parser._ytdlp_resolver())
-        self.assertEqual(parser._plan_stream_source(), "innertube")
-
-    def test_single_gate_does_not_switch_yet(self):
-        parser = self._parser()
-        parser._note_gate_result(True)
-        self.assertFalse(parser._innertube_cooling_down())
-        self.assertEqual(parser._plan_stream_source(), "innertube")
-
-    def test_two_consecutive_gates_hand_streaming_to_ytdlp(self):
-        parser = self._parser()
-        parser._note_gate_result(True)
-        parser._note_gate_result(True)
-        self.assertTrue(parser._innertube_cooling_down())
-        self.assertEqual(parser._plan_stream_source(), "ytdlp_only")
-
-    def test_one_success_clears_the_cooldown(self):
-        parser = self._parser()
-        parser._note_gate_result(True)
-        parser._note_gate_result(True)
-        parser._note_gate_result(False)
-        self.assertFalse(parser._innertube_cooling_down())
-        self.assertEqual(parser._gate_streak, 0)
-        self.assertEqual(parser._plan_stream_source(), "innertube")
-
-    def test_cooldown_expires_on_its_own(self):
-        parser = self._parser()
-        parser._note_gate_result(True)
-        parser._note_gate_result(True)
-        parser._gate_until = time.monotonic() - 1
-        self.assertFalse(parser._innertube_cooling_down())
-        self.assertEqual(parser._plan_stream_source(), "innertube")
-
-    def test_innertube_mode_ignores_the_cooldown(self):
-        parser = self._parser(stream_source="innertube")
-        parser._note_gate_result(True)
-        parser._note_gate_result(True)
-        self.assertTrue(parser._innertube_cooling_down())
-        self.assertEqual(parser._plan_stream_source(), "innertube")
-
-
-class _TailProbeResponse:
-    def __init__(self, status):
-        self.status = status
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, *exc_info):
-        return False
-
-
-class _TailProbeSession:
-    def __init__(self, statuses):
-        self.statuses = dict(statuses)
-        self.calls = []
-
-    def get(self, url, **kwargs):
-        self.calls.append((url, kwargs))
-        return _TailProbeResponse(self.statuses[url])
-
-
-class InnertubeTailProbeTest(unittest.TestCase):
-    """在真正下载前识别只能读取前半段的 Googlevideo 直链。"""
-
-    @staticmethod
-    def _url(name, length=100):
-        return f"https://r1---sn.example.googlevideo.com/{name}?clen={length}"
-
-    @staticmethod
-    def _run(parser, session, media_url):
-        return asyncio.run(
-            parser._probe_media_tail(
-                session,
-                media_url,
-                {"User-Agent": "test-client"},
-                _Deadline(20),
-            )
-        )
-
-    def test_single_stream_tail_206_is_usable(self):
-        url = self._url("progressive", 321)
-        session = _TailProbeSession({url: 206})
-
-        ok, detail = self._run(YouTubeParser(), session, url)
-
-        self.assertIs(ok, True)
-        self.assertEqual(detail, "media=HTTP 206")
-        self.assertEqual(
-            session.calls[0][1]["headers"]["Range"],
-            "bytes=320-320",
-        )
-
-    def test_dash_checks_video_and_audio_tails(self):
-        video = self._url("video", 800)
-        audio = self._url("audio", 120)
-        session = _TailProbeSession({video: 206, audio: 206})
-
-        ok, detail = self._run(
-            YouTubeParser(), session, f"dash:{video}||{audio}"
-        )
-
-        self.assertIs(ok, True)
-        self.assertEqual(detail, "video=HTTP 206, audio=HTTP 206")
-        ranges = {call[1]["headers"]["Range"] for call in session.calls}
-        self.assertEqual(ranges, {"bytes=799-799", "bytes=119-119"})
-
-    def test_any_dash_tail_403_rejects_the_innertube_pair(self):
-        video = self._url("video", 800)
-        audio = self._url("audio", 120)
-        session = _TailProbeSession({video: 206, audio: 403})
-
-        ok, detail = self._run(
-            YouTubeParser(), session, f"dash:{video}||{audio}"
-        )
-
-        self.assertIs(ok, False)
-        self.assertIn("video=HTTP 206", detail)
-        self.assertIn("audio=HTTP 403", detail)
-
-    def test_missing_clen_is_inconclusive_without_network_request(self):
-        url = "https://r1---sn.example.googlevideo.com/video"
-        session = _TailProbeSession({})
-
-        ok, detail = self._run(YouTubeParser(), session, url)
-
-        self.assertIsNone(ok)
-        self.assertEqual(detail, "media=缺少clen")
-        self.assertEqual(session.calls, [])
-
-    def test_rejected_innertube_tail_hands_streaming_to_ytdlp(self):
+    def test_parse_uses_ytdlp_as_the_only_stream_source(self):
         parser = YouTubeParser()
-        innertube_url = self._url("innertube", 800)
-        ytdlp_video = self._url("ytdlp-video", 700)
-        ytdlp_audio = self._url("ytdlp-audio", 100)
         player = {
             "videoDetails": {
-                "title": "完整性回退测试",
+                "title": "单路取流测试",
                 "author": "Nova",
                 "lengthSeconds": "60",
             },
             "playabilityStatus": {"status": "OK"},
         }
-        fallback = YtDlpStream(
-            url=f"dash:{ytdlp_video}||{ytdlp_audio}",
-            kind="dash",
-            height=1080,
+        stream = YtDlpStream(
+            url="https://media.example/video.mp4",
+            kind="progressive",
+            height=720,
             user_agent="yt-dlp-agent",
-            filesize=800,
-            detail="137/1080p/mp4+140/m4a",
+            filesize=8 * 1024 * 1024,
+            detail="22/720p/mp4",
         )
 
         with (
             mock.patch.object(
                 parser,
                 "_fetch_oembed",
-                new=mock.AsyncMock(return_value={"title": "完整性回退测试"}),
+                new=mock.AsyncMock(return_value={}),
             ),
             mock.patch.object(
                 parser,
-                "_fetch_player",
-                new=mock.AsyncMock(return_value=(player, "ios")),
+                "_fetch_player_light",
+                new=mock.AsyncMock(return_value=(player, "tv_simply")),
             ),
             mock.patch.object(
                 parser,
@@ -3301,33 +2661,28 @@ class InnertubeTailProbeTest(unittest.TestCase):
             ),
             mock.patch.object(
                 parser,
-                "_probe_media_tail",
-                new=mock.AsyncMock(return_value=(False, "video=HTTP 403")),
-            ),
-            mock.patch.object(
-                parser,
                 "_resolve_with_ytdlp",
-                new=mock.AsyncMock(return_value=(fallback, {})),
+                new=mock.AsyncMock(return_value=(stream, {})),
             ) as resolve_ytdlp,
-            mock.patch.object(
-                youtube_platform,
-                "select_youtube_media_detailed",
-                return_value=(innertube_url, "progressive", 720, 800),
-            ),
         ):
             metadata = asyncio.run(
                 parser._parse(object(), f"https://youtu.be/{VID}")
             )
 
         resolve_ytdlp.assert_awaited_once_with(VID)
+        self.assertFalse(
+            hasattr(youtube_platform, "select_youtube_media_detailed")
+        )
         self.assertEqual(metadata["youtube_stream_source"], "ytdlp")
-        self.assertEqual(metadata["youtube_stream_kind"], "dash")
+        self.assertEqual(metadata["youtube_player_client"], "tv_simply")
+        self.assertEqual(metadata["youtube_stream_kind"], "progressive")
         self.assertEqual(
             metadata["video_urls"],
-            [[f"dash:range:{ytdlp_video}||range:{ytdlp_audio}"]],
+            [["range:https://media.example/video.mp4"]],
         )
-        self.assertEqual(metadata["video_headers"]["User-Agent"], "yt-dlp-agent")
-        self.assertIsNone(parser.consume_cookie_alert())
+        self.assertEqual(
+            metadata["video_headers"]["User-Agent"], "yt-dlp-agent"
+        )
 
 
 class YtDlpInfoSummaryTest(unittest.TestCase):

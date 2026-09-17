@@ -7,7 +7,7 @@
 * typeset  字体发现、换行、绘制
 * surface  Pillow 绘制原语（渐变、玻璃、噪点、圆角、阴影）
 * model    把解析结果归一为渲染数据模型
-* theme    主题配方（8 套 + 跟随平台）与布局预设（4 套）
+* theme    主题配方（6 套 + 跟随平台）与布局预设（4 套）
 * blocks   可测量、可组合的排版区块
 * engine   装配与渲染入口
 """
@@ -42,7 +42,6 @@ from .theme import (
     LAYOUT_ALIASES,
     LAYOUT_KEYS,
     LAYOUTS,
-    PLATFORM_THEMES,
     THEME_ALIASES,
     THEME_KEYS,
     THEMES,
@@ -71,7 +70,6 @@ __all__ = [
     "MediaItem",
     "Metrics",
     "PLATFORM_ACCENTS",
-    "PLATFORM_THEMES",
     "Palette",
     "QuoteItem",
     "RenderContext",

@@ -1,51 +1,39 @@
 # YouTube Nova
 
-面向 AstrBot 的独立 YouTube 媒体解析插件。它从 Nova 流媒体解析中拆出，保留完整的 YouTube 解析、下载、卡片和 Cookie 维护链路，不依赖原插件。
+面向 AstrBot 的独立 YouTube 媒体解析插件。视频流统一由 yt-dlp 解析，Innertube 负责补充标题、头像、统计、热评与登录态诊断。
 
 ![YouTube 卡片](docs/images/youtube-card.png)
 
 ## 功能
 
-- Innertube 与 yt-dlp 双取流，可按环境自动切换
-- 支持普通视频、Shorts、直播回放、`youtu.be` 与 YouTube Music 链接
-- DASH 音视频合并、画质与发送体积预算、超限自动压缩
-- 作者头像、播放量、点赞数、评论数与公开热评
-- YouTube、哔哩哔哩、X（推特）三套仿站皮肤及五套通用皮肤，支持深浅色和四种布局
-- 浏览器 Profile 登录态与手动 Cookie 双模式，可自动唤醒浏览器续活
-- yt-dlp JS challenge 与可选 PO Token provider
-- 文本/卡片/富媒体输出控制、翻译、聚合、归档和频率限制
+- 支持普通视频、Shorts、直播回放、YouTube Music 与常见分享链接
+- yt-dlp + JS challenge 取流，可选 PO Token provider
+- 浏览器 Profile 或手动 Cookie，支持自动同步、轮换、续活和失效提醒
+- DASH 音视频合并、画质/体积预算与超限自动压缩
+- 作者头像、播放量、点赞数、评论数和公开热评
+- YouTube 仿站皮肤与五套通用皮肤，支持深浅色和四种布局
+- 文本、卡片、富媒体、翻译、聚合、归档和频率限制
 
 ## 安装
 
-在 AstrBot 插件市场通过仓库地址安装：
+在 AstrBot 插件市场使用仓库地址安装：
 
 ```text
 https://github.com/Whereis-Alice/astrbot_plugin_youtube_nova
 ```
 
-完整取流还需要服务器安装 `ffmpeg`，以及 Node.js 22+、Deno 2.3+、Bun 或 QuickJS 中任意一个 JS 运行时。Python 依赖会随插件安装，其中包含 `yt-dlp` 与 `yt-dlp-ejs`。
+完整取流需要服务器安装 `ffmpeg`，以及 Node.js 22+、Deno 2.3+、Bun 或 QuickJS 中任意一个 JS 运行时。Python 依赖会随插件安装，其中包含 `yt-dlp` 与 `yt-dlp-ejs`。
 
-## 从 Nova 流媒体解析迁移
+## 配置要点
 
-先将 Nova 流媒体解析升级到 `v1.16.0` 或更高版本，再安装本插件；旧版 Nova 仍内置 YouTube 解析，同时启用会重复响应。随后把旧配置中的 `youtube`、`proxy`、`download` 和需要的消息/卡片选项填入本插件。
+- 有图形桌面的长期服务器优先使用“浏览器 Profile”登录态，并启用有头浏览器续活。
+- “可发送视频体积上限”默认 48 MiB；超出后可自动压缩，适合 LLOneBot/QQ Highway。
+- 代理解析与媒体下载必须走同一出口，否则 googlevideo 直链可能返回 403。
+- PO Token 是可选增强，不能替代有效登录态，也不能改善机房 IP 的信誉。
+- Cookie、代理和浏览器 Profile 都是本机凭据，不要提交到仓库、Issue 或日志。
 
-Cookie 属于登录凭据，不要上传到 GitHub、日志或聊天记录。旧插件缓存中的 Cookie 轮换状态不会自动跨插件复制；有图形桌面的长期服务器建议改用浏览器 Profile 模式。
-
-## 关键配置
-
-- “视频流取用来源”建议保持“自动”。机房 IP 连续触发门禁后会暂时直接交给 yt-dlp。
-- “可发送视频体积上限”默认 48 MiB，适配 LLOneBot/QQ Highway 的实测边界；其他适配器可自行提高。
-- Cookie 不是必填。有图形桌面的服务器优先选“浏览器 Profile”，插件可定期用有头浏览器访问 YouTube、同步最新登录态并自动关闭；无桌面环境再用手动 Cookie。
-- PO Token 只能增强部分媒体流请求，不能替代有效 Cookie 或改善高风险出口 IP。
-
-完整链路、Cookie 维护和 PO Token 配置见 [YouTube 说明](docs/youtube.md)。
-
-## 安全边界
-
-- 下载器拒绝本机、内网、链路本地与保留地址，重定向后会再次校验。
-- 代理地址和 Cookie 仅从 AstrBot 插件配置读取，不写入仓库。
-- Cookie 运行时文件、媒体缓存和临时归档均被 `.gitignore` 排除。
+完整配置见 [配置说明](docs/configuration.md)，取流、Cookie 与排障见 [YouTube 说明](docs/youtube.md)。
 
 ## 许可
 
-主体遵循 [GNU Affero General Public License v3.0](LICENSE)。`LICENSES/` 目录保留随源码迁移的第三方许可文本。
+主体遵循 [GNU Affero General Public License v3.0](LICENSE)。`LICENSES/` 保留第三方许可文本。

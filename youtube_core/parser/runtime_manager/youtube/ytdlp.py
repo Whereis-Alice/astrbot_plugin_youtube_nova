@@ -1,4 +1,4 @@
-"""YouTube yt-dlp 兜底运行时：Innertube 取不到流时借 yt-dlp 解出直链。
+"""YouTube yt-dlp 取流运行时。
 
 为什么需要这一层：YouTube 已对 Web 端全面改用 SABR（服务端自适应码率）
 分发，`streamingData.adaptiveFormats` 里既没有 `url` 也没有
@@ -7,9 +7,9 @@
 高（上游每隔几周就换一次算法），所以这一层直接复用 yt-dlp 的现成能力，
 把维护成本转移给上游。
 
-代价与取舍：一次 `extract_info` 需要数秒并会拉起一个 JS 运行时子进程，
-因此它只作为兜底——常规视频仍走轻量的 Innertube 直取路径，只有取不到流
-时才付这份代价。
+一次 `extract_info` 需要数秒并会拉起一个 JS 运行时子进程，但比维护一套
+重复且容易拿到半截 403 地址的 Innertube 选流实现更可靠。因此媒体流统一由
+本模块解析；Innertube 只负责轻量元数据、登录态和评论。
 
 环境要求（缺一不可；缺件时本模块只是安静降级并给出可操作建议，不抛错）：
 
@@ -26,7 +26,7 @@ Token）。yt-dlp 自己不产生这类令牌，而是留了一层插件接口�
 provider（如 bgutil-ytdlp-pot-provider）去跑 BotGuard。本模块的立场不变
 ——不自己实现 BotGuard，只做两件事：探测当前 Python 环境里有没有装
 provider 插件，以及把用户配置的地址/路径透传给 yt-dlp 的 extractor_args。
-装不装都不影响兜底链路可用（缺 provider 不计入 problems）。
+装不装都不影响基础取流链路可用（缺 provider 不计入 problems）。
 
 实测边界（别抱错期待）：PO Token 能救的是 SABR / gvs 403 那一类「有元数
 据但拿不到媒体流」的情况；如果 YouTube 在播放器响应阶段就回
@@ -146,7 +146,7 @@ class _SilentLogger:
 
 @dataclass(frozen=True)
 class YtDlpEnvironment:
-    """一次 yt-dlp 兜底链路可用性探测的结果快照。"""
+    """一次 yt-dlp 取流环境探测的结果快照。"""
 
     available: bool = False
     version: str = ""
@@ -157,13 +157,13 @@ class YtDlpEnvironment:
     runtime_name: str = ""
     runtime_version: str = ""
     # 已安装的 PO Token 提供方插件模块名。属于可选增强件，故意不进
-    # problems——缺它不影响兜底链路可用。
+    # problems——缺它不影响基础取流链路可用。
     pot_providers: Tuple[str, ...] = ()
     problems: Tuple[str, ...] = ()
 
     @property
     def ready(self) -> bool:
-        """三件套是否齐全，可以真正发起兜底解析。"""
+        """三件套是否齐全，可以真正发起取流。"""
         return bool(self.available and not self.problems)
 
     def summary(self) -> str:
@@ -366,7 +366,7 @@ def _probe_uncached(preference: str) -> YtDlpEnvironment:
 
 
 def probe_ytdlp_environment(preference: str = "") -> YtDlpEnvironment:
-    """探测兜底链路是否齐全；结果按运行时偏好缓存，避免反复起子进程。"""
+    """探测取流环境是否齐全；结果按运行时偏好缓存，避免反复起子进程。"""
     key = (preference or "").strip().lower()
     with _PROBE_LOCK:
         cached = _PROBE_CACHE.get(key)
@@ -384,7 +384,7 @@ def reset_ytdlp_environment_cache() -> None:
         _ANNOUNCED_ENVIRONMENTS.clear()
 
 
-# ── 元数据兜底 ────────────────────────────────────────────
+# ── 元数据摘要 ────────────────────────────────────────────
 
 def _iso_date(text: Any) -> str:
     """把 yt-dlp 的 20260822 形式的日期转成 2026-08-22。"""
@@ -541,7 +541,7 @@ def _format_label(fmt: Dict[str, Any]) -> str:
 
 
 class YtDlpStreamResolver:
-    """用 yt-dlp 兜底解析一条 YouTube 视频的可直连媒体流。"""
+    """用 yt-dlp 解析一条 YouTube 视频的可直连媒体流。"""
 
     def __init__(
         self,
@@ -589,7 +589,7 @@ class YtDlpStreamResolver:
         每次调用都按运行时的权威 Cookie 重写文件，不做任何复用。原因：
         yt-dlp 拿到 ``cookiefile`` 后会在收工时把它自己的 jar 存回同一个
         路径，服务端下发过删除指令的条目（SID / SAPISID / LOGIN_INFO 等
-        登录核心）会被就地抹掉。一旦复用这份被削过的文件，兜底解析就会
+        登录核心）会被就地抹掉。一旦复用这份被削过的文件，后续取流就会
         永久按匿名跑。相比一次网络请求，写 2KB 磁盘的开销可以忽略。
 
         ``revision`` 只为兼容调用方保留，不再参与任何缓存判定。
@@ -605,7 +605,7 @@ class YtDlpStreamResolver:
             return ""
         lines = [
             "# Netscape HTTP Cookie File",
-            "# 由 Nova 插件依当前 YouTube 登录态生成，供 yt-dlp 兜底使用。",
+            "# 由 Nova 插件依当前 YouTube 登录态生成，供 yt-dlp 取流使用。",
         ]
         dropped: List[str] = []
         for name, value in cookies.items():
@@ -666,7 +666,7 @@ class YtDlpStreamResolver:
         默认（fetch_pot=auto、未填地址）什么都不传，这是有意为之：
 
         * `auto` 交给 yt-dlp 自己判断何时需要令牌。强制 `always` 的代价是
-          每次兜底都要拉起一个 node 子进程跑 BotGuard，实测 1~3 秒，而多
+          每次取流都要拉起一个 node 子进程跑 BotGuard，实测 1~3 秒，而多
           数视频根本不需要令牌；
         * 地址留空时 provider 自己有合理默认值——脚本模式默认找
           `~/bgutil-ytdlp-pot-provider/server`，HTTP 模式默认
@@ -742,12 +742,12 @@ class YtDlpStreamResolver:
         """缺件只提醒一次，附上可直接照做的建议。"""
         signature = "|".join(env.problems)
         if signature in _WARNED_PROBLEMS:
-            logger.debug(f"[youtube] yt-dlp 兜底不可用: {env.summary()}")
+            logger.debug(f"[youtube] yt-dlp 取流不可用: {env.summary()}")
             return
         _WARNED_PROBLEMS.add(signature)
         logger.warning(
-            f"[youtube] yt-dlp 兜底暂不可用（{env.summary()}），"
-            f"疑难视频只能出封面卡片{env.advice()}"
+            f"[youtube] yt-dlp 取流暂不可用（{env.summary()}），"
+            f"视频只能退化为封面卡片{env.advice()}"
         )
 
     def _announce(self, env: YtDlpEnvironment) -> None:
@@ -935,8 +935,7 @@ class YtDlpStreamResolver:
     def select(self, info: Any) -> Optional[YtDlpStream]:
         """从 extract_info 的结果里挑一路最合适的流。
 
-        偏好与 Innertube 侧一致：dash 分离流（画质最高）> progressive 单文件
-        > 纯视频流兜底。
+        偏好顺序：dash 分离流（画质最高）> progressive 单文件 > 纯视频流。
         """
         formats: List[Dict[str, Any]] = []
         if isinstance(info, dict) and isinstance(info.get("formats"), list):

@@ -100,10 +100,10 @@ def is_live_url(url: str) -> bool:
     - 重定向：若URL的 query 参数里包含一个可解码出的URL，且该URL为直播域名链接，则也判定为直播
 
     例：
-    - https://live.bilibili.com/ -> True
-    - https://api.live.bilibili.com/ -> True
+    - https://live.example.com/ -> True
+    - https://api.live.example.com/ -> True
     - https://example.com/redirect?url=https%3A%2F%2Flive.example.com%2Froom -> True
-    - https://www.douyin.com/ -> False
+    - https://www.example.com/ -> False
     """
     if not url:
         return False

@@ -36,13 +36,10 @@ class MediaMetadata(TypedDict, total=False):
     video_cover_fallback_indexes: List[int]
 
     access_status: str
-    restriction_type: str
     restriction_label: str
     can_access_full_video: bool
-    is_preview_only: bool
     access_message: str
     timelength_ms: int
-    available_length_ms: int
     hot_comments: List[Dict[str, Any]]
 
     use_image_proxy: bool

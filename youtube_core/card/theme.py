@@ -2,8 +2,9 @@
 
 一套主题（skin）= 背景做法 + 装饰通道 + 面板风格 + 区块顺序 + 每个区块的变体。
 主题只描述怎么排，颜色一律来自 palette 模块，尺寸一律来自 metrics 模块，
-因此 theme(深/浅) x skin(8) x layout(4) 的 64 种组合都能真正生效。
-另有一个哨兵值 auto（跟随平台），渲染时按来源站点现场挑仿站皮肤。
+因此 theme(深/浅) x skin(6) x layout(4) 的 48 种组合都能真正生效。
+另有一个哨兵值 auto（跟随平台）；本插件只解析 YouTube，因此固定落到
+YouTube 观看页皮肤。
 """
 
 from __future__ import annotations
@@ -50,8 +51,6 @@ class ThemeRecipe:
     accent_alt: RGB | None = None
     #: 圆角整体缩放：仿站点视觉时用来还原对方的圆角语言
     radius_scale: float = 1.0
-    #: 品牌标识：非空时区块可绘制对应站点的标志（当前支持 "bilibili"）
-    brand: str = ""
     caption_numbering: bool = False  # 媒体窗编号 01/03
     order: tuple[str, ...] = (
         "eyebrow",
@@ -253,102 +252,44 @@ NOCTURNE = ThemeRecipe(
     ),
 )
 
-BILIBILI = ThemeRecipe(
-    key="bilibili",
-    label="哔哩哔哩",
-    palette_key="bilibili",
-    density="compact",
-    backdrop="plain",
-    ornament=(),
-    panel="card",
-    ornament_frame="none",
-    # 全部走 B 站专属变体：顶栏、认证头像、话题正文、方格图集、页签、楼层评论、底部操作栏
-    eyebrow="bili_top",
-    identity="bili",
-    headline="bili_post",
-    body="bili",
-    media="bili",
-    stats="bili",
-    comments="bili",
-    footer="bili",
-    tracking_eyebrow=0.0,
-    headline_scale=1.0,
-    accent_source="fixed",
-    accent_fixed=hex_to_rgb("#FB7299"),
-    accent_adjust=False,          # 品牌粉必须原样呈现
-    accent_alt=hex_to_rgb("#00AEEC"),  # 品牌蓝：链接 / 次级标记
-    radius_scale=0.36,            # 还原 B 站标志性的小圆角
-    brand="bilibili",
-    order=(
-        # 对齐 B 站移动端动态详情页：顶栏 -> 作者 -> 正文 -> 图集 -> 属地 -> 页签 -> 评论 -> 操作栏
-        "eyebrow",
-        "identity",
-        "headline",
-        "body",
-        "media",
-        "ipnote",
-        "tabbar",
-        "quote",
-        "warnings",
-        "comments",
-        "footer",
-    ),
-)
-
-X = ThemeRecipe(
-    key="x",
-    label="X（推特）",
-    palette_key="x",
-    density="compact",
-    backdrop="plain",
-    ornament=(),
-    panel="card",
-    ornament_frame="none",
-    # X 单帖详情页与 B 站动态详情页是同一种结构（顶栏 / 身份 / 正文 / 图集 /
-    # 时间统计 / 页签 / 楼层评论 / 操作栏），所以复用同一批区块变体，只换基调。
-    eyebrow="bili_top",
-    identity="bili",
-    headline="bili_post",
-    body="bili",
-    media="bili",
-    stats="bili",
-    comments="bili",
-    footer="bili",
-    tracking_eyebrow=0.0,
-    headline_scale=1.0,
-    accent_source="fixed",
-    accent_fixed=hex_to_rgb("#1D9BF0"),
-    accent_adjust=False,          # 品牌蓝必须原样呈现
-    accent_alt=hex_to_rgb("#F91880"),  # 点赞粉：次级标记 / 页脚链接
-    radius_scale=1.0,             # X 的媒体大圆角与全药丸按钮
-    brand="",                     # X 不在卡面上重复画站点标志
-    order=(
-        "eyebrow",
-        "identity",
-        "headline",
-        "body",
-        "media",
-        "ipnote",
-        "tabbar",
-        "quote",
-        "warnings",
-        "comments",
-        "footer",
-    ),
-)
-
-#: YouTube 观看页：结构与 X / B 站的「详情页」同构，所以同样复用 bili_* 区块变体，
-#: 只把基调换成 YouTube 的中性灰阶 + 品牌红，chrome（操作栏药丸）由 blocks 按平台换件。
-YOUTUBE = replace(
-    X,
+YOUTUBE = ThemeRecipe(
     key="youtube",
     label="YouTube",
     palette_key="youtube",
+    density="compact",
+    backdrop="plain",
+    ornament=(),
+    panel="card",
+    ornament_frame="none",
+    # YouTube 观看页专用详情结构：顶栏、作者、正文、封面、数据、评论与操作栏。
+    eyebrow="detail_top",
+    identity="detail",
+    headline="detail_post",
+    body="detail",
+    media="detail",
+    stats="detail",
+    comments="detail",
+    footer="detail",
+    tracking_eyebrow=0.0,
+    headline_scale=1.0,
+    accent_source="fixed",
     accent_fixed=hex_to_rgb("#FF0033"),
+    accent_adjust=False,
     accent_alt=hex_to_rgb("#3EA6FF"),
     radius_scale=0.9,
+    order=(
+        "eyebrow",
+        "identity",
+        "headline",
+        "body",
+        "media",
+        "ipnote",
+        "quote",
+        "warnings",
+        "comments",
+        "footer",
+    ),
 )
-
 
 THEMES: dict[str, ThemeRecipe] = {
     "aurora": AURORA,
@@ -356,8 +297,6 @@ THEMES: dict[str, ThemeRecipe] = {
     "telemetry": TELEMETRY,
     "gallery": GALLERY,
     "nocturne": NOCTURNE,
-    "bilibili": BILIBILI,
-    "x": X,
     "youtube": YOUTUBE,
 }
 
@@ -384,12 +323,13 @@ THEME_ALIASES: dict[str, str] = {
     "archive": "gallery",
     "night": "nocturne",
     "midnight": "nocturne",
-    "feed": "bilibili",
-    "timeline": "bilibili",
-    "social": "bilibili",
-    "stream": "bilibili",
-    "bili": "bilibili",
-    "b站": "bilibili",
+    # 独立插件早期曾误带 B 站 / X 皮肤；旧值统一迁移到 YouTube。
+    "feed": "youtube",
+    "timeline": "youtube",
+    "social": "youtube",
+    "stream": "youtube",
+    "bili": "youtube",
+    "b站": "youtube",
     # 中文别名（含 v1.4 旧中文名）
     "极光": "aurora",
     "极光玻璃": "aurora",
@@ -413,26 +353,28 @@ THEME_ALIASES: dict[str, str] = {
     "夜曲霓虹": "nocturne",
     "霓虹夜景": "nocturne",
     "霓虹": "nocturne",
-    "信息流": "bilibili",
-    "动态流": "bilibili",
-    "时间线": "bilibili",
-    "b站动态": "bilibili",
-    "哔哩哔哩": "bilibili",
-    "哔哩哔哩风格": "bilibili",
-    "哔哩": "bilibili",
-    "小电视": "bilibili",
-    "b站风格": "bilibili",
-    "bilibili风格": "bilibili",
-    "twitter": "x",
-    "tweet": "x",
-    "推特": "x",
-    "x（推特）": "x",
-    "x(推特)": "x",
-    "蓝鸟": "x",
-    "小蓝鸟": "x",
-    "twitter风格": "x",
-    "x风格": "x",
-    "推特风格": "x",
+    "信息流": "youtube",
+    "动态流": "youtube",
+    "时间线": "youtube",
+    "b站动态": "youtube",
+    "哔哩哔哩": "youtube",
+    "哔哩哔哩风格": "youtube",
+    "哔哩": "youtube",
+    "小电视": "youtube",
+    "b站风格": "youtube",
+    "bilibili风格": "youtube",
+    "bilibili": "youtube",
+    "twitter": "youtube",
+    "tweet": "youtube",
+    "推特": "youtube",
+    "x（推特）": "youtube",
+    "x(推特)": "youtube",
+    "蓝鸟": "youtube",
+    "小蓝鸟": "youtube",
+    "twitter风格": "youtube",
+    "x风格": "youtube",
+    "推特风格": "youtube",
+    "x": "youtube",
     "yt": "youtube",
     "油管": "youtube",
     "油管风格": "youtube",
@@ -442,7 +384,7 @@ THEME_ALIASES: dict[str, str] = {
 
 
 def resolve_theme_key(value: str | None) -> str:
-    """把任意历史 / 中文 / 英文写法归一到 8 个主题 key 之一。"""
+    """把任意历史 / 中文 / 英文写法归一到 6 个主题 key 之一。"""
     if not value:
         return "aurora"
     raw = str(value).strip()
@@ -461,24 +403,6 @@ def get_theme(value: str | None) -> ThemeRecipe:
 
 #: 「跟随平台」哨兵 key：不是一套真皮肤，渲染时按 model.platform_key 现场决定。
 AUTO_THEME_KEY = "auto"
-
-#: platform_key -> 仿站皮肤。没收录的平台一律回落到默认皮肤（极光）。
-PLATFORM_THEMES: dict[str, str] = {
-    "bilibili": "bilibili",
-    "acfun": "bilibili",
-    "weibo": "bilibili",
-    "xiaohongshu": "bilibili",
-    "xiaoheihe": "bilibili",
-    "nga": "bilibili",
-    "toutiao": "bilibili",
-    "xianyu": "bilibili",
-    "douyin": "bilibili",
-    "kuaishou": "bilibili",
-    "tiktok": "bilibili",
-    "youtube": "youtube",
-    "twitter": "x",
-    "x": "x",
-}
 
 #: 「跟随平台」的英文 / 中文写法
 AUTO_THEME_ALIASES: frozenset[str] = frozenset(
@@ -514,8 +438,8 @@ def resolve_theme_key_for_platform(
     """
     if not is_auto_theme(value):
         return resolve_theme_key(value)
-    key = str(platform_key or "").strip().lower()
-    return PLATFORM_THEMES.get(key, "aurora")
+    del platform_key
+    return "youtube"
 
 
 # ============================ 布局预设 ============================
