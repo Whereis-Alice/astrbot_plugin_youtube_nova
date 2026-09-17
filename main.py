@@ -44,7 +44,7 @@ from .youtube_core.translation import MetadataTranslator, build_card_metadata_li
     "astrbot_plugin_youtube_nova",
     "Whereis-Alice",
     "YouTube Nova - YouTube 视频、卡片、翻译与热评解析",
-    "1.2.1",
+    "1.3.0",
 )
 class YouTubeNovaPlugin(Star):
     # Google 侧的登录凭据大约每 10 分钟就会换一茬。轮换请求本身极轻（一个
