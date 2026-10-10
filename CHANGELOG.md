@@ -1,5 +1,9 @@
 # Changelog
 
+## v1.3.1 (2026-10-11)
+
+- 修复 yt-dlp 偶发 `KeyError('INNERTUBE_CONTEXT')` 导致整条取流崩溃、只能退化成封面卡片的问题：机房 IP 被人机验证拦截时 embed 页会被取成空页，yt-dlp 的 `_fix_embedded_ytcfg` 直接取缺失键报错；现插件侧对该函数打幂等、线程安全的运行时补丁，空 ytcfg 时安静跳过修补、让 yt-dlp 继续用其它客户端取流，正常解析行为不变（参见 yt-dlp issue #14826）。
+
 ## v1.3.0 (2026-09-17)
 
 - 超限视频可通过 QQ 私聊文件发送：群聊调用 `upload_group_file`，私聊调用 `upload_private_file`，只发送给当前会话。

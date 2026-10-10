@@ -40,6 +40,7 @@ provider 插件，以及把用户配置的地址/路径透传给 yt-dlp 的 extr
 from __future__ import annotations
 
 import asyncio
+import functools
 import os
 import pkgutil
 import re
@@ -103,6 +104,10 @@ _WARNED_PROBLEMS: set = set()
 # 环境摘要也只播报一次：既让人知道 POT 提供方到底有没有生效，又不至于每条
 # 链接都刷一遍同样的一行。
 _ANNOUNCED_ENVIRONMENTS: set = set()
+# yt-dlp 兼容补丁状态位：补丁幂等 + 线程安全，只打一次；空 ytcfg 拦截只播报一次。
+_YTDLP_PATCH_LOCK = threading.Lock()
+_YTDLP_PATCHED = False
+_YTDLP_PATCH_ANNOUNCED = False
 
 
 def _as_int(value: Any) -> int:
@@ -218,6 +223,52 @@ class YtDlpEnvironment:
             "若遇到取到元数据但媒体流 403/SABR 受阻，可 "
             f"{_POT_PLUGIN_HINT}"
         )
+
+
+def _apply_ytdlp_compat_patches() -> None:
+    """给 yt-dlp 打一个幂等、线程安全的运行时兼容补丁。
+
+    yt-dlp 的 YouTube 提取器走 web_embedded 客户端时会调用
+    ``_fix_embedded_ytcfg(ytcfg)``，内部直接 ``ytcfg['INNERTUBE_CONTEXT']`` 取值。
+    机房 IP 偶发被人机验证拦截时 embed 页会被取成空页，``extract_ytcfg`` 返回
+    ``{}``，于是抛出 ``KeyError('INNERTUBE_CONTEXT')`` 掀翻整条取流，最终退化成
+    封面卡片（参见 yt-dlp issue #14826，其源码注释已标注该问题）。
+
+    这里把该函数包一层：ytcfg 不是 dict 或缺少 INNERTUBE_CONTEXT 时直接跳过，
+    让 yt-dlp 继续用 web/tv/ios 等其它客户端取流；正常 embed 页行为完全不变。
+    补丁具备幂等性（重复调用不会层层包裹）与版本安全性（目标函数不存在时静默跳过）。
+    """
+    global _YTDLP_PATCHED
+    if _YTDLP_PATCHED:
+        return
+    with _YTDLP_PATCH_LOCK:
+        if _YTDLP_PATCHED:
+            return
+        try:
+            from yt_dlp.extractor.youtube import _base as yt_base
+        except Exception:
+            # yt-dlp 未安装或内部结构变动：不是致命问题，放行即可。
+            _YTDLP_PATCHED = True
+            return
+        original = getattr(yt_base, "_fix_embedded_ytcfg", None)
+        if original is None or getattr(original, "_nova_guarded", False):
+            _YTDLP_PATCHED = True
+            return
+
+        @functools.wraps(original)
+        def _guarded(ytcfg, *args, **kwargs):
+            if not isinstance(ytcfg, dict) or "INNERTUBE_CONTEXT" not in ytcfg:
+                # 空 / 异常 ytcfg：跳过修补，避免 KeyError 掀翻整条取流。
+                global _YTDLP_PATCH_ANNOUNCED
+                if not _YTDLP_PATCH_ANNOUNCED:
+                    _YTDLP_PATCH_ANNOUNCED = True
+                    logger.debug("[youtube] 已拦截 yt-dlp 空 ytcfg，跳过 _fix_embedded_ytcfg，改用其它客户端继续取流")
+                return None
+            return original(ytcfg, *args, **kwargs)
+
+        _guarded._nova_guarded = True  # type: ignore[attr-defined]
+        yt_base._fix_embedded_ytcfg = _guarded
+        _YTDLP_PATCHED = True
 
 
 def _probe_js_runtime(preference: str = "") -> Tuple[str, str, bool]:
@@ -343,6 +394,7 @@ def _probe_uncached(preference: str) -> YtDlpEnvironment:
         import yt_dlp
     except Exception:
         return YtDlpEnvironment(problems=("未安装 yt-dlp",))
+    _apply_ytdlp_compat_patches()
     version = _ytdlp_version(yt_dlp)
     runtime_name, runtime_version, ejs_arch = _probe_js_runtime(preference)
     ejs_available = _probe_ejs() if ejs_arch else False
@@ -733,6 +785,7 @@ class YtDlpStreamResolver:
         """阻塞地跑一次 yt-dlp 元数据提取，必须在线程里调用。"""
         import yt_dlp
 
+        _apply_ytdlp_compat_patches()
         url = f"https://www.youtube.com/watch?v={video_id}"
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=False)
