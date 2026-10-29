@@ -33,10 +33,14 @@ class MessageSender:
         self,
         *,
         group_file_timeout_seconds: int = Config.DEFAULT_GROUP_FILE_TIMEOUT_SECONDS,
+        group_file_source_mode: str = "auto",
+        group_file_callback_api_base: str = "",
         group_file_uploader: Optional[GroupFileUploader] = None,
     ):
         self.group_file_uploader = group_file_uploader or GroupFileUploader(
-            group_file_timeout_seconds
+            group_file_timeout_seconds,
+            source_mode=group_file_source_mode,
+            callback_api_base=group_file_callback_api_base,
         )
 
     def can_upload_group_file(self, event: AstrMessageEvent) -> bool:
@@ -263,7 +267,7 @@ class MessageSender:
                         failed_urls.append(source_url)
                     logger.info(
                         f"文件上传回执未确认: {file_name}，不重试上传；"
-                        f"详情: {exc.__cause__ or exc}"
+                        f"详情: {exc}"
                     )
                 except Exception as exc:
                     item["pending"] = False

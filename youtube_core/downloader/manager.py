@@ -48,7 +48,7 @@ class DownloadManager:
         cache_dir_available: Optional[bool] = None,
         max_concurrent_downloads: int = None,
         video_cover_only: bool = False,
-        oversize_delivery: str = "cover",
+        oversize_delivery: str = "group_file",
         transcode_oversize_video: bool = False,
         transcode_mode: str = "above_size",
         transcode_trigger_mb: float = 0.0,
@@ -234,8 +234,16 @@ class DownloadManager:
 
     @property
     def video_download_cap_mb(self) -> float:
-        """兼容属性：启用任一种后处理时，下载只受管理员硬上限约束。"""
+        """兼容属性：启用压缩或文件投递时只受管理员硬上限约束。"""
         if self.transcode_enabled or self.group_file_enabled:
+            return self.max_video_size_mb
+        return self.effective_video_cap_mb
+
+    def _video_download_cap_mb(self, *, allow_group_file: bool) -> float:
+        """当前会话可用的下载预算，0 硬上限仍保持不限制。"""
+        if self.transcode_enabled or (
+            self.group_file_enabled and allow_group_file and self.cache_dir_available
+        ):
             return self.max_video_size_mb
         return self.effective_video_cap_mb
 
@@ -250,10 +258,14 @@ class DownloadManager:
     @property
     def _send_cap_is_effective(self) -> bool:
         """生效上限是否来自可发送上限（用于改写下载器抛出的硬限制文案）。"""
+        return self._send_cap_is_effective_for(allow_group_file=True)
+
+    def _send_cap_is_effective_for(self, *, allow_group_file: bool) -> bool:
+        """按当前会话判断下载器是否使用普通视频发送上限。"""
         if (
             self.send_video_max_mb <= 0
             or self.transcode_enabled
-            or self.group_file_enabled
+            or (self.group_file_enabled and allow_group_file and self.cache_dir_available)
         ):
             return False
         return (
@@ -886,6 +898,9 @@ class DownloadManager:
         force_flags = self._effective_force_flags(metadata, video_count)
         media_id = self._generate_media_id(url, metadata)
         local_items: List[Dict[str, Any]] = []
+        video_download_cap_mb = self._video_download_cap_mb(
+            allow_group_file=group_file_available
+        )
 
         logger.debug(
             f"处理元数据: {url}, 视频={video_count}, 图片={image_count}, "
@@ -1005,22 +1020,9 @@ class DownloadManager:
                         "headers": metadata.get("video_headers", {}),
                         "proxy": self._proxy_for(metadata, "video", proxy_addr),
                         "max_bytes": (
-                            int(self.max_video_size_mb * 1024 * 1024)
-                            if (
-                                self.max_video_size_mb > 0
-                                and (
-                                    self.transcode_enabled
-                                    or (
-                                        self.group_file_enabled
-                                        and group_file_available
-                                    )
-                                )
-                            )
-                            else (
-                                int(self.effective_video_cap_mb * 1024 * 1024)
-                                if self.effective_video_cap_mb > 0
-                                else None
-                            )
+                            int(video_download_cap_mb * 1024 * 1024)
+                            if video_download_cap_mb > 0
+                            else None
                         ),
                     }
                 )
@@ -1091,7 +1093,9 @@ class DownloadManager:
                     if status_code is not None:
                         video_status_codes[idx] = status_code
                     video_modes[idx] = "skip"
-                    if "硬限制" in reason and self._send_cap_is_effective:
+                    if "硬限制" in reason and self._send_cap_is_effective_for(
+                        allow_group_file=group_file_available
+                    ):
                         # 下载器按生效上限止损，而生效上限来自"能发出去的体积"，
                         # 直接告诉用户是平台收不下，而不是抛一句内部术语。
                         video_skip_reasons[idx] = (
@@ -1140,7 +1144,13 @@ class DownloadManager:
                     size_exceeded = True
                     continue
 
-                if self._should_transcode(size_mb):
+                original_file_delivery = (
+                    limit_kind == "send"
+                    and self.group_file_enabled
+                    and group_file_available
+                    and self.cache_dir_available
+                )
+                if self._should_transcode(size_mb) and not original_file_delivery:
                     target_mb = self._transcode_target_mb(size_mb)
                     fitted = await self._fit_video_to_send_limit(
                         file_path,

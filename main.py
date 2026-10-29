@@ -44,7 +44,7 @@ from .youtube_core.translation import MetadataTranslator, build_card_metadata_li
     "astrbot_plugin_youtube_nova",
     "Whereis-Alice",
     "YouTube Nova - YouTube 视频、卡片、翻译与热评解析",
-    "1.3.0",
+    "1.4.0",
 )
 class YouTubeNovaPlugin(Star):
     # Google 侧的登录凭据大约每 10 分钟就会换一茬。轮换请求本身极轻（一个
@@ -96,7 +96,9 @@ class YouTubeNovaPlugin(Star):
         )
 
         self.message_sender = MessageSender(
-            group_file_timeout_seconds=cfg.download.group_file_timeout_seconds
+            group_file_timeout_seconds=cfg.download.group_file_timeout_seconds,
+            group_file_source_mode=cfg.download.group_file_source_mode,
+            group_file_callback_api_base=cfg.relay.callback_api_base,
         )
         self._cleanup_tasks: set[asyncio.Task] = set()
         self._expired_cleanup_task: Optional[asyncio.Task] = None
@@ -135,6 +137,9 @@ class YouTubeNovaPlugin(Star):
     async def terminate(self):
         await self._shutdown_expired_cache_cleanup()
         await self._shutdown_youtube_cookie_keepalive()
+        if self.youtube_parser is not None:
+            # 热重载前等待不可取消的 yt-dlp 线程收尾，避免新旧实例共写 Cookie。
+            await self.youtube_parser.aclose()
         await self._shutdown_delayed_cleanups()
         await self.youtube_cookie_notice.shutdown()
         await self.download_manager.shutdown()

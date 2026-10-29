@@ -437,8 +437,9 @@ class DownloadConfig:
     cache_dir: str = ""
     cache_dir_available: bool = False
     max_concurrent_downloads: int = Config.DOWNLOAD_MANAGER_MAX_CONCURRENT
-    oversize_delivery: str = OVERSIZE_DELIVERY_COVER
+    oversize_delivery: str = OVERSIZE_DELIVERY_GROUP_FILE
     group_file_timeout_seconds: int = Config.DEFAULT_GROUP_FILE_TIMEOUT_SECONDS
+    group_file_source_mode: str = Config.DEFAULT_GROUP_FILE_SOURCE_MODE
     transcode_oversize_video: bool = Config.DEFAULT_TRANSCODE_OVERSIZE_VIDEO
     transcode_mode: str = TRANSCODE_MODE_ABOVE_SIZE
     transcode_trigger_mb: float = 0.0
@@ -460,14 +461,15 @@ class DownloadConfig:
 
     @property
     def stream_budget_mb(self) -> float:
-        """需要后处理时先取高质量源，否则直接按普通发送预算选流。"""
+        """文件投递取原始质量，所有选流预算都遵守管理员硬上限。"""
         compression_enabled = (
             self.transcode_oversize_video
             and self.transcode_mode != TRANSCODE_MODE_DISABLED
         )
         if self.group_file_enabled or compression_enabled:
             return self.max_video_size_mb
-        return self.send_video_max_mb
+        caps = [cap for cap in (self.max_video_size_mb, self.send_video_max_mb) if cap > 0]
+        return min(caps) if caps else 0.0
 
 
 @dataclass
@@ -894,8 +896,15 @@ class ConfigManager:
         )
 
         oversize_delivery = self._parse_oversize_delivery(
-            download_raw.get("oversize_delivery", "仅发送信息与封面")
+            download_raw.get("oversize_delivery", "上传为文件（群聊/私聊）")
         )
+        group_file_source_mode = str(
+            download_raw.get("group_file_source_mode", Config.DEFAULT_GROUP_FILE_SOURCE_MODE)
+            or Config.DEFAULT_GROUP_FILE_SOURCE_MODE
+        ).strip().lower()
+        if group_file_source_mode not in {"auto", "local", "http"}:
+            logger.warning("download.group_file_source_mode 无效，已回落 auto")
+            group_file_source_mode = Config.DEFAULT_GROUP_FILE_SOURCE_MODE
         group_file_timeout_seconds = max(
             Config.MIN_GROUP_FILE_TIMEOUT_SECONDS,
             min(
@@ -1124,6 +1133,7 @@ class ConfigManager:
             max_concurrent_downloads=max_concurrent,
             oversize_delivery=oversize_delivery,
             group_file_timeout_seconds=group_file_timeout_seconds,
+            group_file_source_mode=group_file_source_mode,
             transcode_oversize_video=transcode_oversize_video,
             transcode_mode=transcode_mode,
             transcode_trigger_mb=transcode_trigger_mb,

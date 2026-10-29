@@ -1102,6 +1102,7 @@ class YouTubeParser(BaseVideoParser):
         self.ytdlp_pot_provider = (ytdlp_pot_provider or "").strip()
         self.ytdlp_fetch_pot = (ytdlp_fetch_pot or "auto").strip() or "auto"
         self._ytdlp: Optional[YtDlpStreamResolver] = None
+        self._closed = False
         # 访客身份令牌：从任意一次 Innertube/watch 响应里顺手捞到，之后所有
         # 请求带上它，让 YouTube 把这些请求看成同一个会话而不是一堆散客。
         # 只驻内存不落盘——它本身是短期票据，跨重启复用没有意义。
@@ -1228,6 +1229,8 @@ class YouTubeParser(BaseVideoParser):
 
     def _ytdlp_resolver(self) -> YtDlpStreamResolver:
         """惰性构造唯一的媒体流解析器。"""
+        if self._closed:
+            raise RuntimeError("YouTube 解析器已关闭")
         if self._ytdlp is None:
             self._ytdlp = YtDlpStreamResolver(
                 proxy=self.proxy,
@@ -1247,6 +1250,12 @@ class YouTubeParser(BaseVideoParser):
             )
         return self._ytdlp
 
+    async def aclose(self) -> None:
+        """停止新的解析，并等待取流线程关闭 Cookie jar。"""
+        self._closed = True
+        if self._ytdlp is not None:
+            await self._ytdlp.shutdown()
+
     async def _resolve_with_ytdlp(
         self,
         video_id: str,
@@ -1256,6 +1265,8 @@ class YouTubeParser(BaseVideoParser):
         即便没挑出可用流，info 里的标题/作者/时长往往还是完整的，所以元数据
         摘要独立返回——Innertube 被全线拦下时它就是卡片唯一的信息来源。
         """
+        if self._closed:
+            return None, {}
         resolver = self._ytdlp_resolver()
         started = time.time()
         try:
@@ -1551,7 +1562,11 @@ class YouTubeParser(BaseVideoParser):
         session: aiohttp.ClientSession,
         url: str,
     ) -> Optional[MediaMetadata]:
+        if self._closed:
+            return None
         async with self.semaphore:
+            if self._closed:
+                return None
             try:
                 if self.browser_cookie_source is not None:
                     # Normal parses only read the recent profile snapshot. If a
@@ -1663,6 +1678,25 @@ class YouTubeParser(BaseVideoParser):
         session: aiohttp.ClientSession,
         url: str,
     ) -> Optional[MediaMetadata]:
+        """收拢所有并发解析任务，取消或异常时不遗留后台取流。"""
+        if self._closed:
+            return None
+        tasks: set[asyncio.Task] = set()
+        try:
+            return await self._parse_impl(session, url, tasks)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _parse_impl(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        tasks: set[asyncio.Task],
+    ) -> Optional[MediaMetadata]:
         video_id = parse_youtube_identity(url)
         if not video_id:
             raise ValueError(f"无法从链接中解析 YouTube 视频 ID: {url}")
@@ -1685,6 +1719,7 @@ class YouTubeParser(BaseVideoParser):
         ytdlp_task = asyncio.ensure_future(
             self._resolve_with_ytdlp(video_id)
         )
+        tasks.update((oembed_task, player_task, ytdlp_task))
         oembed_result, player_result = await asyncio.gather(
             oembed_task, player_task, return_exceptions=True
         )

@@ -163,6 +163,11 @@ def test_outer_deadline_is_also_unconfirmed(tmp_path):
             GroupFileUploadError,
         ),
         ({"status": "async", "retcode": 1}, GroupFileUploadUnconfirmed),
+        ({"retcode": 1200, "wording": "没有群文件权限"}, GroupFileUploadError),
+        ({"status": "ok", "retcode": "1200"}, GroupFileUploadError),
+        ({"status": "ok", "retcode": "1"}, GroupFileUploadUnconfirmed),
+        (None, GroupFileUploadUnconfirmed),
+        ({}, GroupFileUploadUnconfirmed),
     ],
 )
 def test_raw_onebot_failure_or_async_ack_is_not_completed(
@@ -174,6 +179,39 @@ def test_raw_onebot_failure_or_async_ack_is_not_completed(
     with pytest.raises(error_type) as caught:
         asyncio.run(GroupFileUploader().upload(make_event(bot), str(path), path.name))
     assert type(caught.value) is error_type
+
+
+@pytest.mark.parametrize("data", [None, {}])
+def test_real_aiocqhttp_async_empty_data_stays_unconfirmed(tmp_path, data):
+    async def run():
+        requests = []
+
+        async def send(raw):
+            request = json.loads(raw)
+            requests.append(request)
+            asyncio.get_running_loop().call_soon(
+                ResultStore.add,
+                {
+                    "echo": request["echo"],
+                    "status": "async",
+                    "retcode": 1,
+                    "data": data,
+                }
+            )
+
+        bot = make_bot(UnifiedApi(wsr_api=WebSocketReverseApi(
+            {"987654": SimpleNamespace(send=send)}, set(), 180
+        )))
+        path = tmp_path / "video.mp4"
+        path.write_bytes(b"video")
+        uploader = GroupFileUploader()
+        uploader.timeout_seconds = 0.5
+        with pytest.raises(GroupFileUploadUnconfirmed):
+            await uploader.upload(make_event(bot), str(path), path.name)
+        assert len(requests) == 1
+        assert path.exists()
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("aggregated", [False, True])

@@ -9,7 +9,8 @@
 - 支持普通视频、Shorts、直播回放、YouTube Music 与常见分享链接
 - yt-dlp + JS challenge 取流，可选 PO Token provider
 - 浏览器 Profile 或手动 Cookie，支持自动同步、轮换、续活和失效提醒
-- DASH 音视频合并、可选超限群聊/私聊文件投递与独立可调的视频压缩策略
+- DASH 音视频合并，超限原视频直接作为群文件/私聊文件发送，支持 NapCat、SnowLuma、LLBot
+- 自动选择共享本地路径或 HTTP 文件服务，适应同机、跨容器和分离部署
 - 作者头像、播放量、点赞数、评论数和公开热评
 - YouTube 仿站皮肤与五套通用皮肤，支持深浅色和四种布局
 - 文本、卡片、富媒体、翻译、聚合、归档和频率限制
@@ -27,7 +28,9 @@ https://github.com/Whereis-Alice/astrbot_plugin_youtube_nova
 ## 配置要点
 
 - 有图形桌面的长期服务器优先使用“浏览器 Profile”登录态，并启用有头浏览器续活。
-- “可发送视频体积上限”默认 48 MiB；超限后可选发送 QQ 群文件或私聊文件，压缩则按独立策略执行。
+- “可发送视频体积上限”默认 48 MiB；超过后默认直接发送原视频文件，跳过压缩。例如 169.7 MiB 的长视频直接上传群文件，保留原画质。
+- 从旧版本升级时，将“超限视频投递方式”设为“上传为文件（群聊/私聊）”。旧配置中的“仅发送信息与封面”会保留；选择文件投递后，即使旧压缩开关仍开着，超限视频也会直接发送原文件。
+- 三个 QQ 协议端均通过 AstrBot 的 aiocqhttp / OneBot v11 接入。分离部署需设置可由协议端访问的 AstrBot `callback_api_base`，详见[配置说明](docs/configuration.md)。
 - 代理解析与媒体下载必须走同一出口，否则 googlevideo 直链可能返回 403。
 - PO Token 是可选增强，不能替代有效登录态，也不能改善机房 IP 的信誉。
 - Cookie、代理和浏览器 Profile 都是本机凭据，不要提交到仓库、Issue 或日志。

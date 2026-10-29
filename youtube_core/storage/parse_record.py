@@ -148,6 +148,14 @@ class ParseRecordManager:
     def build_link_key(cls, url: str, parser_name: Any = "") -> str:
         parser = str(parser_name or "unknown").strip() or "unknown"
         canonical = cls.canonicalize_url(url)
+        if parser.lower() == "youtube":
+            # 分享链接、Shorts 和任意查询参数都指向同一个视频。延迟导入
+            # 复用解析器的身份规则，避免维护第二份 URL 解析逻辑。
+            from ..parser.platform.youtube import parse_youtube_identity
+
+            video_id = parse_youtube_identity(url)
+            if video_id:
+                canonical = f"https://www.youtube.com/watch?v={video_id}"
         return f"{parser}:{canonical}" if canonical else ""
 
     def filter_links(

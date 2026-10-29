@@ -5,6 +5,7 @@ import os
 import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from astrbot.api.event import AstrMessageEvent
 
@@ -110,8 +111,72 @@ def build_group_file_name(
 class GroupFileUploader:
     """根据当前 QQ 会话选择文件上传 action；保留历史内部名称。"""
 
-    def __init__(self, timeout_seconds: int = 600):
+    def __init__(
+        self,
+        timeout_seconds: int = 600,
+        *,
+        source_mode: str = "auto",
+        callback_api_base: str = "",
+    ):
         self.timeout_seconds = max(30, min(3600, int(timeout_seconds or 600)))
+        self.source_mode = (
+            source_mode if source_mode in {"auto", "local", "http"} else "auto"
+        )
+        self.callback_api_base = str(callback_api_base or "").strip().rstrip("/")
+
+    async def _upload_source(self, path: str) -> str:
+        """使用宿主短期文件服务跨容器传递文件，避免把整个视频编码进 API。"""
+        if self.source_mode == "local":
+            return path
+        try:
+            from astrbot.core import astrbot_config, file_token_service
+        except ImportError as exc:
+            if self.source_mode == "auto":
+                return path
+            raise GroupFileUploadError(
+                "当前 AstrBot 版本不支持文件 Token 服务"
+            ) from exc
+        callback_base = self.callback_api_base or str(
+            astrbot_config.get("callback_api_base") or ""
+        ).strip().rstrip("/")
+        if not callback_base:
+            if self.source_mode == "auto":
+                return path
+            raise GroupFileUploadError(
+                "HTTP 文件上传需要配置协议端可访问的 callback_api_base"
+                "（AstrBot 全局配置或插件文件服务回调地址）"
+            )
+        try:
+            parsed = urlsplit(callback_base)
+            valid = (
+                parsed.scheme in {"http", "https"}
+                and parsed.hostname
+                and not parsed.username
+                and not parsed.password
+                and not parsed.query
+                and not parsed.fragment
+            )
+            # 同时验证端口，避免畸形 URL 注册无用令牌。
+            _port = parsed.port
+        except ValueError:
+            valid = False
+        if not valid:
+            raise GroupFileUploadError("文件服务回调地址必须是有效的 HTTP(S) 基础地址")
+        # File.register_to_file_service() 使用同一服务但只有默认 300 秒。
+        # 群文件可能等待更久；上传超时后令牌仍与缓存保留期保持一致。
+        token = await file_token_service.register_file(
+            path,
+            timeout=self.timeout_seconds + max(600, self.timeout_seconds),
+        )
+        return f"{callback_base}/api/file/{token}"
+
+    @staticmethod
+    def _safe_error_detail(error: Any, source: str) -> str:
+        """协议端的下载错误可能回显含凭据的文件服务 URL。"""
+        text = str(error or "接口拒绝")
+        if source.startswith(("http://", "https://")):
+            text = text.replace(source, "<文件服务地址>")
+        return text
 
     @staticmethod
     def _target(event: AstrMessageEvent) -> tuple[str, dict, str] | None:
@@ -197,30 +262,43 @@ class GroupFileUploader:
         if target is None:
             raise GroupFileUploadError("无法确定文件接收会话")
         action, recipient, label = target
-        payload = {
-            **recipient,
-            "file": path,
-            "name": str(file_name or Path(path).name),
-        }
-        logger.info(
-            f"开始上传{label}: {payload['name']}，回执等待上限 {self.timeout_seconds} 秒"
-        )
+        source = path
         try:
+            source = await self._upload_source(path)
+            payload = {
+                **recipient,
+                "file": source,
+                "name": str(file_name or Path(path).name),
+            }
+            source_label = "HTTP 文件服务" if source != path else "共享本地路径"
+            logger.info(
+                f"开始上传{label}: {payload['name']}，来源 {source_label}，"
+                f"回执等待上限 {self.timeout_seconds} 秒"
+            )
             result = await asyncio.wait_for(
                 self._call_action(event, action, payload),
                 timeout=self.timeout_seconds,
             )
             # 某些适配器直接返回 OneBot 响应包装，不会抛 ActionFailed。
             if isinstance(result, dict):
-                if result.get("status") == "failed":
+                status = str(result.get("status") or "").lower()
+                retcode = str(result.get("retcode", "0"))
+                if status == "failed" or retcode not in {"0", "1"}:
                     detail = (
                         result.get("wording") or result.get("message") or "接口拒绝"
                     )
+                    detail = self._safe_error_detail(detail, source)
                     raise GroupFileUploadError(f"{label}上传失败：{detail}")
-                if result.get("status") == "async" or result.get("retcode") == 1:
+                if status == "async" or retcode == "1":
                     raise GroupFileUploadUnconfirmed(
                         f"协议端已受理，尚未确认{label}上传完成"
                     )
+            # aiocqhttp 返回 data 并丢弃包装中的 status；异步受理空回执
+            # 因而会变成 None。不能把这种回复当作文件已上传。
+            if result is None or result == {}:
+                raise GroupFileUploadUnconfirmed(
+                    f"未收到{label}完成回执，请稍后查看当前会话，暂勿重复解析"
+                )
             return result
         except asyncio.CancelledError:
             raise
@@ -231,4 +309,5 @@ class GroupFileUploader:
                 raise GroupFileUploadUnconfirmed(
                     f"{label}上传回执未确认，文件可能仍在上传或已发送，请稍后查看当前会话"
                 ) from exc
-            raise GroupFileUploadError(f"{label}上传失败：{exc}") from exc
+            detail = self._safe_error_detail(exc, source)
+            raise GroupFileUploadError(f"{label}上传失败：{detail}") from exc

@@ -54,6 +54,7 @@ class TranscodeGateTests(unittest.TestCase):
             "send_video_max_mb": 100,
             "cache_dir_available": True,
             "transcode_oversize_video": True,
+            "oversize_delivery": "cover",
         }
         params.update(kwargs)
         return DownloadManager(**params)
@@ -448,6 +449,7 @@ class ProcessMetadataTranscodeTests(unittest.TestCase):
                 "max_video_size_mb": 1000,
                 "send_video_max_mb": 100,
                 "transcode_oversize_video": True,
+                "oversize_delivery": "cover",
             }
             params.update(kwargs)
             manager = DownloadManager(
@@ -555,7 +557,7 @@ class ProcessMetadataTranscodeTests(unittest.TestCase):
         self.assertTrue(result["send_limit_exceeded"])
         self.assertEqual(result["video_transcode_notes"], [None])
 
-    def test_failed_compression_keeps_original_for_group_file(self):
+    def test_group_file_bypasses_compression_when_available(self):
         result, seen = self._run(
             TranscodeResult(error="编码器不可用"),
             oversize_delivery="group_file",
@@ -593,7 +595,7 @@ class ProcessMetadataTranscodeTests(unittest.TestCase):
             with mock.patch(
                 "youtube_core.downloader.manager.transcode_video_to_size",
                 return_value=TranscodeResult(error="编码器不可用"),
-            ):
+            ) as transcode:
                 group_result = asyncio.run(
                     manager.process_metadata(
                         session=None,
@@ -610,7 +612,8 @@ class ProcessMetadataTranscodeTests(unittest.TestCase):
             self.assertEqual(group_result["video_modes"], ["group_file"])
             self.assertEqual(group_result["file_paths"], [original])
             self.assertTrue(os.path.isfile(original))
-            self.assertIn("编码器不可用", group_result["video_transcode_warnings"][0])
+            self.assertEqual(group_result["video_transcode_warnings"], [None])
+            transcode.assert_not_called()
 
     def test_video_within_cap_is_never_transcoded(self):
         result, seen = self._run(TranscodeResult(error="不该被调用"), downloaded_mb=42.0)

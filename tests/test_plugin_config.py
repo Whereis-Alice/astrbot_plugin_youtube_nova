@@ -14,11 +14,51 @@ def test_default_config_builds_only_youtube_parser() -> None:
 
     assert config.parser_output.modes == {"youtube": "全部发送"}
     assert config.download.send_video_max_mb == 48.0
-    assert config.download.oversize_delivery == "cover"
+    assert config.download.oversize_delivery == "group_file"
+    assert config.download.transcode_oversize_video is False
+    assert config.download.group_file_source_mode == "auto"
     assert config.download.transcode_mode == "above_size"
     assert len(parsers) == 1
     assert parsers[0].name == "youtube"
     assert parsers[0].can_parse("https://youtu.be/dQw4w9WgXcQ")
+
+
+def test_legacy_compression_setting_does_not_disable_default_file_delivery() -> None:
+    config = ConfigManager({"download": {"transcode_oversize_video": True}})
+
+    assert config.download.transcode_oversize_video is True
+    assert config.download.group_file_enabled is True
+
+
+def test_explicit_cover_policy_is_preserved() -> None:
+    config = ConfigManager({"download": {"oversize_delivery": "仅发送信息与封面"}})
+
+    assert config.download.oversize_delivery == "cover"
+
+
+def test_stream_budget_honors_admin_limit_with_compression_disabled() -> None:
+    for hard_mb, send_mb, expected_mb in ((20, 48, 20), (100, 0, 100), (0, 0, 0)):
+        config = ConfigManager(
+            {"download": {"max_video_size_mb": hard_mb, "send_video_max_mb": send_mb,
+                          "oversize_delivery": "cover", "transcode_oversize_video": False}}
+        )
+        assert config.download.stream_budget_mb == expected_mb
+
+
+def test_schema_defaults_match_original_file_delivery_policy() -> None:
+    download = json.loads((ROOT / "_conf_schema.json").read_text("utf-8"))["download"]["items"]
+
+    assert download["send_video_max_mb"]["default"] == 48
+    assert download["oversize_delivery"]["default"] == "上传为文件（群聊/私聊）"
+    assert download["transcode_oversize_video"]["default"] is False
+    assert download["group_file_source_mode"]["default"] == "auto"
+
+
+def test_file_source_mode_validation() -> None:
+    for raw, expected in (("HTTP", "http"), ("local", "local"),
+                          ("auto", "auto"), ("invalid", "auto"), (None, "auto")):
+        config = ConfigManager({"download": {"group_file_source_mode": raw}})
+        assert config.download.group_file_source_mode == expected
 
 
 def test_group_file_and_compression_policy_are_independent() -> None:

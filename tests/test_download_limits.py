@@ -291,5 +291,110 @@ class ProcessMetadataSendLimitTests(unittest.TestCase):
         self.assertEqual(result["image_urls"], [])
 
 
+class OriginalFileDeliveryPolicyTests(unittest.TestCase):
+    """长视频原文件投递，以及未知大小、无限预算和不可用会话的回退。"""
+
+    def _run(self, *, actual_mb=169.7, estimate_mb=169.7, available=True, **kwargs):
+        with tempfile.TemporaryDirectory() as cache_dir:
+            options = {
+                "max_video_size_mb": 1000,
+                "send_video_max_mb": 48,
+                "cache_dir": cache_dir,
+                "cache_dir_available": True,
+                "transcode_oversize_video": True,
+            }
+            options.update(kwargs)
+            manager = DownloadManager(**options)
+            download_budgets = []
+            transcode_calls = []
+
+            async def fake_download(*, session, media_items, cache_dir):
+                results = []
+                for item in media_items:
+                    download_budgets.append(item.get("max_bytes"))
+                    path = os.path.join(cache_dir, "original.mp4")
+                    with open(path, "wb") as media:
+                        media.write(b"original-video")
+                    results.append({"kind": item["kind"], "position": item["position"],
+                                    "success": True, "file_path": path, "size_mb": actual_mb})
+                return results
+
+            async def fake_transcode(file_path, size_mb, target_mb):
+                transcode_calls.append((file_path, size_mb, target_mb))
+                return {"error": "codec unavailable"}
+
+            manager._download_local_items = fake_download
+            manager._fit_video_to_send_limit = fake_transcode
+            result = asyncio.run(manager.process_metadata(
+                session=None,
+                metadata={"url": "https://youtu.be/dQw4w9WgXcQ", "platform": "youtube",
+                          "video_urls": [["dash:https://v/video||https://a/audio"]],
+                          "image_urls": [], "video_size_estimates": [estimate_mb]},
+                group_file_available=available,
+            ))
+            return result, download_budgets, transcode_calls
+
+    def test_oversize_original_bypasses_legacy_enabled_compression(self):
+        result, budgets, compressed = self._run()
+
+        self.assertEqual(result["video_modes"], ["group_file"])
+        self.assertTrue(result["file_paths"][0].endswith("original.mp4"))
+        self.assertEqual(result["video_sizes"], [169.7])
+        self.assertEqual(result["video_transcode_notes"], [None])
+        self.assertEqual(result["video_transcode_warnings"], [None])
+        self.assertEqual(result["failed_video_count"], 0)
+        self.assertEqual(compressed, [])
+        self.assertEqual(budgets, [1000 * 1024 * 1024])
+
+    def test_file_delivery_also_bypasses_always_compression(self):
+        result, _, compressed = self._run(transcode_mode="always")
+
+        self.assertEqual(result["video_modes"], ["group_file"])
+        self.assertEqual(compressed, [])
+
+    def test_actual_download_size_routes_unknown_size_source(self):
+        result, _, compressed = self._run(estimate_mb=None)
+
+        self.assertEqual(result["video_modes"], ["group_file"])
+        self.assertEqual(compressed, [])
+
+    def test_unlimited_admin_cap_stays_unlimited_for_file_download(self):
+        result, budgets, compressed = self._run(max_video_size_mb=0)
+
+        self.assertEqual(budgets, [None])
+        self.assertEqual(result["video_modes"], ["group_file"])
+        self.assertEqual(compressed, [])
+
+    def test_unlimited_admin_cap_stays_unlimited_for_compression(self):
+        _, budgets, compressed = self._run(max_video_size_mb=0, available=False)
+
+        self.assertEqual(budgets, [None])
+        self.assertEqual(len(compressed), 1)
+
+    def test_admin_hard_cap_cannot_be_bypassed_by_file_delivery(self):
+        result, budgets, compressed = self._run(actual_mb=1001, estimate_mb=None)
+
+        self.assertEqual(budgets, [1000 * 1024 * 1024])
+        self.assertEqual(result["video_modes"], ["skip"])
+        self.assertIn("超过限制", result["video_skip_reasons"][0])
+        self.assertEqual(compressed, [])
+
+    def test_unsupported_file_session_keeps_explicit_compression_fallback(self):
+        result, _, compressed = self._run(available=False)
+
+        self.assertEqual(result["video_modes"], ["skip"])
+        self.assertEqual(len(compressed), 1)
+        self.assertIn("codec unavailable", result["video_skip_reasons"][0])
+
+    def test_unsupported_file_session_uses_send_cap_when_compression_off(self):
+        result, budgets, compressed = self._run(
+            actual_mb=40, estimate_mb=None, available=False, transcode_oversize_video=False
+        )
+
+        self.assertEqual(budgets, [48 * 1024 * 1024])
+        self.assertEqual(result["video_modes"], ["local"])
+        self.assertEqual(compressed, [])
+
+
 if __name__ == "__main__":
     unittest.main()

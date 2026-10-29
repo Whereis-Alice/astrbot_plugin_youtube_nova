@@ -582,7 +582,7 @@
       "send_video_max_mb": {
         "description": "可发送视频体积上限（MB）",
         "type": "float",
-        "hint": "普通视频消息的体积边界，单位 MiB。默认 48 为 LLOneBot/QQ Highway 的保守安全值；返回 102902 时通常表示超过当前上传边界。填 0 不限制。压缩策略与超限投递方式分别由下面的配置控制。",
+        "hint": "普通视频消息的体积边界，单位 MiB。默认 48 为 QQ Highway 的保守安全值；超过此值默认直接发送原视频文件，不压缩。填 0 不限制普通视频消息。",
         "default": 48
       },
       "oversize_delivery": {
@@ -592,8 +592,8 @@
           "仅发送信息与封面",
           "上传为文件（群聊/私聊）"
         ],
-        "hint": "视频在压缩策略执行后仍超限时，可改为文件发送：QQ 群聊上传群文件，QQ 私聊发送给当前用户。需要 aiocqhttp / OneBot v11 协议端支持对应文件接口；不支持或明确拒绝时提示原因并保留原链接。",
-        "default": "仅发送信息与封面"
+        "hint": "超过普通视频发送上限时直接发送原视频，优先于已启用的压缩策略：QQ 群聊上传群文件，QQ 私聊发送当前用户。支持 aiocqhttp / OneBot v11 的 NapCat、SnowLuma、LLBot；不支持或明确拒绝时提示原因并保留原链接。下载硬上限仍有效。",
+        "default": "上传为文件（群聊/私聊）"
       },
       "group_file_timeout_seconds": {
         "description": "文件上传超时（秒）",
@@ -601,11 +601,18 @@
         "hint": "单个群聊或私聊文件等待上传回执的最长时间，有效范围 30–3600；aiocqhttp 内层等待同步使用此值。超时只表示结果未确认，协议端可能仍在上传，请先查看当前会话。",
         "default": 600
       },
+      "group_file_source_mode": {
+        "description": "文件上传来源",
+        "type": "string",
+        "options": ["auto", "local", "http"],
+        "hint": "auto：配置 AstrBot callback_api_base 时提供短期 HTTP 下载地址，否则使用共享本地路径。local：AstrBot 与协议端必须看到同一绝对文件路径。http：必须配置协议端可访问的 callback_api_base，适合不同容器或主机；配置缺失时明确提示，不降级为本地路径。",
+        "default": "auto"
+      },
       "transcode_oversize_video": {
         "description": "启用视频压缩",
         "type": "bool",
-        "hint": "独立的视频重编码策略。需要宿主安装 ffmpeg，压缩期间会占用 CPU；关闭后不会因为普通发送上限而隐式压缩。",
-        "default": true
+        "hint": "默认关闭。显式开启时需要宿主安装 ffmpeg；已超限且能作为文件投递的原视频仍直接发送，不进入压缩。其它视频按下方触发方式处理。",
+        "default": false
       },
       "transcode_mode": {
         "description": "压缩触发方式",
@@ -615,7 +622,7 @@
           "超过指定体积",
           "始终压缩"
         ],
-        "hint": "超过指定体积只处理命中压缩阈值的视频；始终压缩会重编码每个下载到本地的视频。",
+        "hint": "超过指定体积只处理命中压缩阈值的视频；始终压缩会重编码下载到本地的视频。超限原文件投递始终优先，跳过该视频的压缩。",
         "condition": {
           "transcode_oversize_video": true
         },

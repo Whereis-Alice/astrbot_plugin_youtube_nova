@@ -627,6 +627,8 @@ class YtDlpStreamResolver:
         self._jar_path = ""
         # yt-dlp 一次解析会起子进程并跑 JS，串行化避免并发请求把 CPU 打满。
         self._gate = asyncio.Semaphore(1)
+        self._extraction_tasks: set[asyncio.Task] = set()
+        self._closed = False
 
     # ── Cookie jar ───────────────────────────────────────
 
@@ -823,6 +825,72 @@ class YtDlpStreamResolver:
             return f"POT 模式=HTTP 服务，地址={self.pot_provider}"
         return f"POT 模式=生成脚本，目录={self.pot_provider}"
 
+    async def _extract_serialized(
+        self,
+        video_id: str,
+        cookie_header: str,
+        cookie_revision: int,
+        use_browser_cookies: bool,
+    ) -> Dict[str, Any]:
+        """线程真实结束后才释放并发槽位；等待中的请求不会改写 Cookie。"""
+        async with self._gate:
+            if self._closed:
+                return {}
+            jar = (
+                ""
+                if self.cookies_from_browser and use_browser_cookies
+                else self._ensure_cookie_jar(cookie_header, cookie_revision)
+            )
+            options = self.build_options(
+                jar, use_browser_cookies=use_browser_cookies
+            )
+            worker = asyncio.create_task(
+                asyncio.to_thread(self._extract_sync, video_id, options)
+            )
+            try:
+                # asyncio.wait 不向 worker 传递取消；与 shield 不同，它也
+                # 不会在 Python 3.14 对取消后已被消费的异常额外报警。
+                await asyncio.wait({worker})
+                return worker.result()
+            except asyncio.CancelledError:
+                # 取消协程不能停止底层线程。调用方已即时超时/取消，此后台任务
+                # 继续持有 gate，直到 yt-dlp 关闭 Cookie jar 和子进程。
+                while not worker.done():
+                    try:
+                        await asyncio.wait({worker})
+                    except asyncio.CancelledError:
+                        continue
+                if not worker.cancelled():
+                    worker.exception()
+                raise
+
+    def _extraction_done(self, task: asyncio.Task) -> None:
+        """消费超时后后台任务的异常，避免无人观察的任务告警。"""
+        self._extraction_tasks.discard(task)
+        if not task.cancelled():
+            task.exception()
+
+    async def shutdown(self) -> None:
+        """停止接收取流，等待旧线程关闭共享 Cookie jar 后再允许热重载。"""
+        self._closed = True
+        tasks = list(self._extraction_tasks)
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        cancellation = None
+        while any(not task.done() for task in tasks):
+            try:
+                # 不把 shutdown 的取消转发到底层线程，也不提前返回；否则
+                # 新插件实例可能与旧线程同时改写固定路径的 Cookie jar。
+                await asyncio.wait(tasks)
+            except asyncio.CancelledError as exc:
+                cancellation = exc
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        self._extraction_tasks.difference_update(tasks)
+        if cancellation is not None:
+            raise cancellation
+
     async def resolve_full(
         self,
         video_id: str,
@@ -840,31 +908,32 @@ class YtDlpStreamResolver:
             任何失败都不抛错，由调用方继续降级。
         """
         video_id = (video_id or "").strip()
-        if not video_id:
+        if self._closed or not video_id:
             return None, {}
         env = probe_ytdlp_environment(self.js_runtime)
         if not env.ready:
             self._warn_unready(env)
             return None, {}
         self._announce(env)
-        jar = (
-            ""
-            if self.cookies_from_browser and use_browser_cookies
-            else self._ensure_cookie_jar(cookie_header, cookie_revision)
+        extraction = asyncio.create_task(
+            self._extract_serialized(
+                video_id, cookie_header, cookie_revision, use_browser_cookies
+            )
         )
-        options = self.build_options(
-            jar,
-            use_browser_cookies=use_browser_cookies,
-        )
+        self._extraction_tasks.add(extraction)
+        extraction.add_done_callback(self._extraction_done)
         try:
-            async with self._gate:
-                info = await asyncio.wait_for(
-                    asyncio.to_thread(self._extract_sync, video_id, options),
-                    timeout=self.timeout,
-                )
+            # 等待并发槽位也计入预算；超时不等待不可取消线程，随后取消
+            # 包装任务：排队任务立即结束，运行任务在后台安全收尾。
+            done, _ = await asyncio.wait({extraction}, timeout=self.timeout)
+            if not done:
+                raise asyncio.TimeoutError
+            info = extraction.result()
         except asyncio.CancelledError:
+            extraction.cancel()
             raise
         except asyncio.TimeoutError:
+            extraction.cancel()
             logger.warning(
                 f"[youtube] yt-dlp 取流超时（上限 {self.timeout:.0f}s）: "
                 f"video_id={video_id}"
