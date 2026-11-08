@@ -113,6 +113,14 @@ def _parse_content_range(value: Optional[str]) -> Optional[Tuple[int, int, int]]
     return start, end, total
 
 
+class _RangeAccessDenied(aiohttp.ClientError):
+    """服务端拒绝此媒体流，不应继续请求同一 URL 的剩余分片。"""
+
+    def __init__(self, status: int) -> None:
+        self.status = status
+        super().__init__(f"HTTP {status}: 媒体访问被拒绝")
+
+
 async def _download_range(
     session: aiohttp.ClientSession,
     url: str,
@@ -163,10 +171,14 @@ async def _download_range(
                         return None
                     chunks.append(data)
                 return b"".join(chunks) if received == expected else None
+            if response.status in {401, 403}:
+                raise _RangeAccessDenied(response.status)
             logger.warning(
                 f"Range下载失败: chunk={chunk_index}, "
                 f"status={response.status}, range={start}-{end}"
             )
+    except _RangeAccessDenied:
+        raise
     except Exception as e:
         logger.warning(
             f"Range下载异常: chunk={chunk_index}, range={start}-{end}, 错误: {e}"
@@ -242,22 +254,33 @@ async def range_download_file(
 
     temp_path = _temporary_path(output_path)
     semaphore = asyncio.Semaphore(max_concurrent)
+    access_denied = asyncio.Event()
+    denied_status: Optional[int] = None
 
     async def download_chunk(chunk_idx: int) -> Tuple[int, bool]:
         """并发下载单个分片并写入目标文件的正确偏移。"""
+        nonlocal denied_status
         async with semaphore:
+            if access_denied.is_set():
+                return chunk_idx, False
             start = chunk_idx * chunk_size
             end = min(start + chunk_size - 1, file_size - 1)
-            data = await _download_range(
-                session,
-                url,
-                start,
-                end,
-                headers,
-                proxy,
-                chunk_idx,
-                file_size,
-            )
+            try:
+                data = await _download_range(
+                    session,
+                    url,
+                    start,
+                    end,
+                    headers,
+                    proxy,
+                    chunk_idx,
+                    file_size,
+                )
+            except _RangeAccessDenied as exc:
+                # 已发出的请求照常收尾；排队分片在取得并发槽后立即停止。
+                denied_status = exc.status
+                access_denied.set()
+                return chunk_idx, False
             if data is None:
                 return chunk_idx, False
 
@@ -312,6 +335,13 @@ async def range_download_file(
                     failed_chunks.append(chunk_idx)
             else:
                 failed_chunks.append(None)
+
+        if access_denied.is_set():
+            logger.warning(
+                f"Range媒体访问被拒绝(HTTP {denied_status})，"
+                f"已停止未开始的分片请求: {format_url_for_log(url)}"
+            )
+            return None
 
         if failed_chunks:
             logger.warning(

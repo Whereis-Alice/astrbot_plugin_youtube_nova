@@ -47,7 +47,7 @@ import re
 import stat
 import tempfile
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 from ....logger import logger
@@ -525,6 +525,7 @@ class YtDlpStream:
     user_agent: str = ""
     filesize: int = 0
     detail: str = ""
+    headers: Dict[str, str] = field(default_factory=dict)
 
 
 def _is_direct(fmt: Any) -> bool:
@@ -553,6 +554,25 @@ def _has_video(fmt: Dict[str, Any]) -> bool:
 
 def _has_audio(fmt: Dict[str, Any]) -> bool:
     return str(fmt.get("acodec") or "none").lower() != "none"
+
+
+def _format_headers(fmt: Dict[str, Any]) -> Dict[str, str]:
+    """保留格式请求头，但不把站点凭据或连接控制字段广播到媒体 CDN。"""
+    blocked = {
+        "cookie", "authorization", "proxy-authorization", "host",
+        "content-length", "connection", "transfer-encoding", "range",
+        "accept-encoding",
+    }
+    headers: Dict[str, str] = {}
+    raw = fmt.get("http_headers")
+    for name, value in (raw if isinstance(raw, dict) else {}).items():
+        if not isinstance(name, str) or not isinstance(value, str):
+            continue
+        if name.lower() in blocked or any(c in name + value for c in "\r\n"):
+            continue
+        headers[name] = value
+    headers["Accept-Encoding"] = "identity"
+    return headers
 
 
 def _format_user_agent(fmt: Dict[str, Any]) -> str:
@@ -775,8 +795,9 @@ class YtDlpStreamResolver:
             options["cookiesfrombrowser"] = self.cookies_from_browser
         elif jar_path:
             options["cookiefile"] = jar_path
-        if self.proxy:
-            options["proxy"] = self.proxy
+        # aiohttp 默认不继承系统代理；空字符串也显式告诉 yt-dlp 直连，
+        # 避免取流与下载出口不同使 Googlevideo 的 IP 绑定签名失效。
+        options["proxy"] = self.proxy or ""
         extractor_args = self._extractor_args(env)
         if extractor_args:
             options["extractor_args"] = extractor_args
@@ -1116,6 +1137,7 @@ class YtDlpStreamResolver:
                     kind="dash",
                     height=_as_int(video.get("height")),
                     user_agent=_format_user_agent(video),
+                    headers=_format_headers(video),
                     filesize=pair["filesize"],
                     detail=f"{_format_label(video)}+{_format_label(audio)}",
                 )
@@ -1129,6 +1151,7 @@ class YtDlpStreamResolver:
                 kind="progressive",
                 height=_as_int(progressive.get("height")),
                 user_agent=_format_user_agent(progressive),
+                headers=_format_headers(progressive),
                 filesize=progressive_size,
                 detail=_format_label(progressive),
             )
@@ -1147,6 +1170,7 @@ class YtDlpStreamResolver:
                 kind="video_only",
                 height=_as_int(video.get("height")),
                 user_agent=_format_user_agent(video),
+                headers=_format_headers(video),
                 filesize=_format_size(video, duration),
                 detail=_format_label(video),
             )

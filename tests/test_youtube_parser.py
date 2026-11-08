@@ -2388,7 +2388,7 @@ class YtDlpOptionsTest(unittest.TestCase):
         self.assertTrue(options["noplaylist"])
         self.assertTrue(options["quiet"])
         self.assertNotIn("cookiefile", options)
-        self.assertNotIn("proxy", options)
+        self.assertEqual(options["proxy"], "")
 
     def test_detected_runtime_is_declared_explicitly(self):
         # yt-dlp 的 js_runtimes 默认只有 deno，装了 node 也不会被启用。
@@ -2669,7 +2669,8 @@ class YtDlpOnlyParseTest(unittest.TestCase):
                 parser._parse(object(), f"https://youtu.be/{VID}")
             )
 
-        resolve_ytdlp.assert_awaited_once_with(VID)
+        self.assertEqual(resolve_ytdlp.await_args.args[0], VID)
+        self.assertEqual(len(resolve_ytdlp.await_args.args), 2)
         self.assertFalse(
             hasattr(youtube_platform, "select_youtube_media_detailed")
         )

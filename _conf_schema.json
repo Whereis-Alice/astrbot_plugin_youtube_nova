@@ -1037,7 +1037,7 @@
       "ytdlp_pot_provider": {
         "description": "PO Token 提供方地址（可留空）",
         "type": "string",
-        "hint": "选填。PO Token 是 YouTube 的 BotGuard 令牌，本插件不自己生成，而是复用社区现成的 yt-dlp 插件（bgutil-ytdlp-pot-provider）。装好插件后这里通常留空即可——留空时会用提供方自己的默认位置：脚本模式默认找 ~/bgutil-ytdlp-pot-provider/server，HTTP 服务模式默认 127.0.0.1:4416。只有位置不同才需要填：填 http:// 或 https:// 开头的地址走 HTTP 服务模式，填目录或脚本路径走脚本模式。注意 PO Token 能救的是「拿到了元数据但媒体流被 403/SABR 挡住」那一类；如果 YouTube 在播放器阶段就要求登录（日志里的 playabilityStatus=LOGIN_REQUIRED，多见于机房 IP），令牌帮不上忙，只能换住宅出口代理或填有效 Cookie。",
+        "hint": "选填。PO Token 是 YouTube 的 BotGuard 令牌，本插件不自己生成，而是复用社区现成的 yt-dlp 插件（bgutil-ytdlp-pot-provider）。装好插件后这里通常留空即可——留空时会用提供方自己的默认位置：脚本模式默认找 ~/bgutil-ytdlp-pot-provider/server，HTTP 服务模式默认 127.0.0.1:4416。只有位置不同才需要填：填 http:// 或 https:// 开头的地址走 HTTP 服务模式，填目录或脚本路径走脚本模式。注意 PO Token 能救的是「拿到了元数据但媒体流被 403/SABR 挡住」那一类；如果 YouTube 在播放器阶段就要求登录（日志里的 playabilityStatus=LOGIN_REQUIRED，多见于机房 IP），令牌帮不上忙，只能换住宅出口代理或填有效 Cookie。 Python 插件与脚本/HTTP 服务的主版本必须一致（例如 2.x 配 2.x），仅安装 Python 包不代表提供方可用。",
         "default": ""
       },
       "ytdlp_fetch_pot": {

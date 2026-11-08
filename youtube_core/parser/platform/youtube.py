@@ -43,6 +43,9 @@ from ..runtime_manager.youtube import (
     summarize_ytdlp_info,
 )
 from ..utils import build_request_headers
+from ..runtime_manager.youtube.media_probe import (
+    select_verified_stream, stream_request_headers,
+)
 
 
 __all__ = [
@@ -1259,6 +1262,7 @@ class YouTubeParser(BaseVideoParser):
     async def _resolve_with_ytdlp(
         self,
         video_id: str,
+        session: Optional[aiohttp.ClientSession] = None,
     ) -> Tuple[Optional[YtDlpStream], Dict[str, Any]]:
         """走 yt-dlp 取流，返回 (流, 元数据摘要)。
 
@@ -1291,6 +1295,15 @@ class YouTubeParser(BaseVideoParser):
         summary = summarize_ytdlp_info(info)
         if stream is None:
             return None, summary
+        if session is not None:
+            stream, warning = await select_verified_stream(
+                session, resolver, stream, info, proxy=self.proxy,
+            )
+            if warning:
+                summary["_stream_warning"] = warning
+                logger.warning(f"[youtube] {warning}: video_id={video_id}")
+            if stream is None:
+                return None, summary
         logger.info(
             f"[youtube] yt-dlp 取流成功: video_id={video_id} "
             f"流={stream.kind}@{stream.height}p "
@@ -1717,7 +1730,7 @@ class YouTubeParser(BaseVideoParser):
             self._fetch_player_light(session, video_id, deadline, failures)
         )
         ytdlp_task = asyncio.ensure_future(
-            self._resolve_with_ytdlp(video_id)
+            self._resolve_with_ytdlp(video_id, session)
         )
         tasks.update((oembed_task, player_task, ytdlp_task))
         oembed_result, player_result = await asyncio.gather(
@@ -1889,14 +1902,7 @@ class YouTubeParser(BaseVideoParser):
             media_height = ytdlp_stream.height
             media_size_bytes = max(0, _as_int(ytdlp_stream.filesize))
             ytdlp_detail = ytdlp_stream.detail
-            if ytdlp_stream.user_agent:
-                # yt-dlp 的直链与它取链时用的 UA 绑定，换 UA 会被 403。
-                video_headers = build_request_headers(
-                    is_video=True,
-                    referer="https://www.youtube.com/",
-                    origin="https://www.youtube.com",
-                    user_agent=ytdlp_stream.user_agent,
-                )
+            video_headers = stream_request_headers(ytdlp_stream)
 
         # Innertube 缺失的字段用同一趟 yt-dlp info 补齐；已有值一律不动。
         if ytdlp_meta:
@@ -1930,8 +1936,9 @@ class YouTubeParser(BaseVideoParser):
         )
 
         # 无可下载流时退化为封面卡片，并说明原因。
-        limit_warnings: List[str] = []
-        if not media_url:
+        stream_warning = str(ytdlp_meta.get("_stream_warning") or "")
+        limit_warnings: List[str] = [stream_warning] if stream_warning else []
+        if not media_url and not stream_warning:
             if restriction_label:
                 limit_warnings.append(f"{restriction_label}，仅展示封面与信息")
             elif is_live:
@@ -2039,7 +2046,7 @@ class YouTubeParser(BaseVideoParser):
                 f"代理={self._proxy_label()}",
             ]
         )
-        if limit_warnings:
+        if limit_warnings and not media_url:
             logger.warning(
                 f"[youtube] 未取到可下载视频流，已降级为封面卡片: "
                 f"{limit_warnings[0]}（{diagnosis}）"
@@ -2048,6 +2055,10 @@ class YouTubeParser(BaseVideoParser):
                 f"；降级链: {chain}"
             )
         else:
+            if limit_warnings:
+                logger.warning(
+                    f"[youtube] {limit_warnings[0]}（{diagnosis}）"
+                )
             if cookie_flipped:
                 logger.warning(
                     f"[youtube] 当前 Cookie 已被服务端视为未登录，"

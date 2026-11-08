@@ -8,6 +8,7 @@
 
 - 支持普通视频、Shorts、直播回放、YouTube Music 与常见分享链接
 - yt-dlp + JS challenge 取流，可选 PO Token provider
+- 媒体头部、中段、尾段预检，受限时自动回退到可下载格式并提示画质变化
 - 浏览器 Profile 或手动 Cookie，支持自动同步、轮换、续活和失效提醒
 - DASH 音视频合并，超限原视频直接作为群文件/私聊文件发送，支持 NapCat、SnowLuma、LLBot
 - 自动选择共享本地路径或 HTTP 文件服务，适应同机、跨容器和分离部署
@@ -34,7 +35,7 @@ https://github.com/Whereis-Alice/astrbot_plugin_youtube_nova
 - 从旧版本升级时，将“超限视频投递方式”设为“上传为文件（群聊/私聊）”。旧配置中的“仅发送信息与封面”会保留；选择文件投递后，即使旧压缩开关仍开着，超限视频也会直接发送原文件。
 - 三个 QQ 协议端均通过 AstrBot 的 aiocqhttp / OneBot v11 接入。分离部署需设置可由协议端访问的 AstrBot `callback_api_base`，详见[配置说明](docs/configuration.md)。
 - 代理解析与媒体下载必须走同一出口，否则 googlevideo 直链可能返回 403。
-- PO Token 是可选增强，不能替代有效登录态，也不能改善机房 IP 的信誉。
+- PO Token 提供方的 Python 插件与生成脚本/服务需要主版本一致；取流成功但中后段 403 时，可在组件匹配后尝试“总是”取令牌。它不能替代有效登录态。
 - Cookie、代理和浏览器 Profile 都是本机凭据，不要提交到仓库、Issue 或日志。
 
 诊断命令仅 AstrBot 管理员可用；只检查本机依赖与配置，不验证 Cookie 是否有效。
