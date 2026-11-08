@@ -2,9 +2,26 @@ import json
 from pathlib import Path
 
 from youtube_core.config_manager import ConfigManager
+from youtube_core import config_manager as config_module
 from youtube_core.storage.parse_record import ParseRecordManager
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_default_cache_uses_plugin_data_directory(monkeypatch, tmp_path):
+    plugin_cache = str(tmp_path / "plugin_data" / "astrbot_plugin_youtube_nova" / "cache")
+    monkeypatch.setattr(config_module, "_get_astrbot_plugin_cache_dir", lambda: plugin_cache)
+    monkeypatch.setattr(config_module, "check_cache_dir_available", lambda directory: True)
+    assert ConfigManager({}).download.cache_dir == plugin_cache
+
+
+def test_explicit_cache_path_is_respected_without_container_detection(monkeypatch, tmp_path):
+    monkeypatch.setattr(config_module, "check_cache_dir_available", lambda directory: True)
+    def unexpected():
+        raise AssertionError("Explicit paths must not be discarded for a default directory")
+    monkeypatch.setattr(config_module, "_get_astrbot_plugin_cache_dir", unexpected)
+    cache = str(tmp_path / "shared cache")
+    assert ConfigManager({"download": {"cache_dir": cache}}).download.cache_dir == cache
 
 
 def test_default_config_builds_only_youtube_parser() -> None:

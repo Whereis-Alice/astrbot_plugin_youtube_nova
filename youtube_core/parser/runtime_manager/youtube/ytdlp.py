@@ -70,12 +70,12 @@ JS_RUNTIME_PREFERENCE: Tuple[str, ...] = ("deno", "node", "bun", "quickjs")
 _RUNTIME_HINT = "node>=22 / deno>=2.3 / bun>=1.2.11 / quickjs>=2023.12.9"
 
 # PO Token 提供方相关。地址以 http(s):// 开头视为 HTTP 服务模式，否则当作
-# 脚本模式的 server 目录/脚本路径。
+# 脚本模式的 server 目录。
 _POT_URL_RE = re.compile(r"^https?://", re.I)
 _FETCH_POT_CHOICES: Tuple[str, ...] = ("auto", "always", "never")
 _POT_PLUGIN_HINT = (
-    "pip install -U bgutil-ytdlp-pot-provider，"
-    "并按其 README 准备生成脚本或 HTTP 服务"
+    "按仓库 docs/installation.md 在 AstrBot 环境运行 "
+    "tools/setup_pot_provider.py 安装版本配套的组件"
 )
 # provider 插件模块名的常见前缀，剥掉后更适合放进日志摘要。
 _POT_NAME_PREFIXES: Tuple[str, ...] = ("getpot_", "get_pot_", "pot_")
@@ -839,12 +839,12 @@ class YtDlpStreamResolver:
         )
 
     def pot_target_label(self) -> str:
-        """说明 PO Token 提供方按哪种模式、指向哪里，便于排障。"""
+        """说明提供方模式，避免把私有路径或服务 URL 凭据写进日志。"""
         if not self.pot_provider:
             return "POT 地址=默认"
         if _POT_URL_RE.match(self.pot_provider):
-            return f"POT 模式=HTTP 服务，地址={self.pot_provider}"
-        return f"POT 模式=生成脚本，目录={self.pot_provider}"
+            return "POT 模式=HTTP 服务（使用已配置地址）"
+        return "POT 模式=生成脚本（使用已配置 server 目录）"
 
     async def _extract_serialized(
         self,

@@ -1,0 +1,18 @@
+services:
+  astrbot:
+    build:
+      context: ../..
+      dockerfile: examples/docker/Dockerfile
+      args:
+        ASTRBOT_IMAGE: ${ASTRBOT_IMAGE:-soulter/astrbot:latest}
+        NODE_IMAGE: ${NODE_IMAGE:-node:24-bookworm-slim}
+    image: astrbot-youtube-nova:local
+    container_name: astrbot
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "6185:6185"
+      # Add protocol-adapter ports required by your own AstrBot configuration.
+    volumes:
+      - ./data:/AstrBot/data

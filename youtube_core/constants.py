@@ -42,7 +42,8 @@ class Config:
     PLUGIN_NAME = "astrbot_plugin_youtube_nova"
     CACHE_DIR_NAME = "cache"
     RUNTIME_DIR_NAME = "runtime_manager"
-    DEFAULT_CACHE_DIR = "/app/sharedFolder/youtube_nova/cache"
+    # 独立使用下载器时的兜底；插件由 ConfigManager 解析实际 AstrBot 数据目录。
+    DEFAULT_CACHE_DIR = os.path.join("data", "plugin_data", PLUGIN_NAME, CACHE_DIR_NAME)
 
     @staticmethod
     def build_cache_dir(prefix: str) -> str:

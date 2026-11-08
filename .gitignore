@@ -10,6 +10,11 @@ venv/
 .idea/
 .vscode/
 *.log
+node_modules/
+pot_provider_*/
+.youtube-nova-setup-cache/
+.youtube-nova-pot-build-*/
+.youtube-nova-pot-setup.lock/
 
 # Runtime media and credentials
 cache/

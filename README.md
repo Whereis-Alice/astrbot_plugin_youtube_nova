@@ -20,17 +20,25 @@
 
 ## 安装
 
-在 AstrBot 插件市场使用仓库地址安装：
+新服务器先阅读[安装与首次验证](docs/installation.md)，包含 Linux、Windows、Docker、可选 PO Token 的完整步骤。
+
+1. 准备 AstrBot `>=4.25.0,<5`，新部署使用 Python 3.12 或 3.13。
+2. 在 **AstrBot 实际运行环境**中准备 `ffmpeg`、`ffprobe` 和一个受支持的 JS 运行时。推荐 Node.js 24 LTS；容器部署需要安装在容器内。
+3. 在 AstrBot 插件市场使用仓库地址安装：
 
 ```text
 https://github.com/Whereis-Alice/astrbot_plugin_youtube_nova
 ```
 
-完整取流需要服务器安装 `ffmpeg`，以及 Node.js 22+、Deno 2.3+、Bun 或 QuickJS 中任意一个 JS 运行时。Python 依赖会随插件安装，其中包含 `yt-dlp` 与 `yt-dlp-ejs`。
+4. 重启 AstrBot，以管理员身份发送 `/yt_status`，再发送一个可公开访问的短视频链接，确认收到视频且声音正常。
+
+`requirements.txt` 中的 Python 依赖会由插件安装流程安装，其中包含 `yt-dlp` 与 `yt-dlp-ejs`；FFmpeg、JS 运行时和可选的 PO Token 组件需要管理员准备。第一次验证可保持默认配置、Cookie 留空，先使用匿名取流。
+
+需要 PO Token 时，仓库提供[配套安装工具](tools/setup_pot_provider.py)，安装固定版本的 Python 提供方和匹配的官方生成脚本；不会自动修改 AstrBot 配置。具体命令见[PO Token 部署](docs/installation.md#可选部署-po-token)。组件、Cookie、浏览器 Profile 和代理配置均由安装者管理，仓库不依赖任何作者服务器的路径或账号。
 
 ## 配置要点
 
-- 有图形桌面的长期服务器优先使用“浏览器 Profile”登录态，并启用有头浏览器续活。
+- 匿名验证通过后，如内容或出口确实需要登录态，再配置手动 Cookie；有图形桌面的长期服务器也可选择“浏览器 Profile”及有头浏览器续活。
 - “可发送视频体积上限”默认 48 MiB；超过后默认直接发送原视频文件，跳过压缩。例如 169.7 MiB 的长视频直接上传群文件，保留原画质。
 - 从旧版本升级时，将“超限视频投递方式”设为“上传为文件（群聊/私聊）”。旧配置中的“仅发送信息与封面”会保留；选择文件投递后，即使旧压缩开关仍开着，超限视频也会直接发送原文件。
 - 三个 QQ 协议端均通过 AstrBot 的 aiocqhttp / OneBot v11 接入。分离部署需设置可由协议端访问的 AstrBot `callback_api_base`，详见[配置说明](docs/configuration.md)。
@@ -40,7 +48,7 @@ https://github.com/Whereis-Alice/astrbot_plugin_youtube_nova
 
 诊断命令仅 AstrBot 管理员可用；只检查本机依赖与配置，不验证 Cookie 是否有效。
 
-完整配置见 [配置说明](docs/configuration.md)，取流、Cookie 与排障见 [YouTube 说明](docs/youtube.md)。
+安装步骤见[安装与首次验证](docs/installation.md)，完整配置见[配置说明](docs/configuration.md)，取流、Cookie 与排障见[YouTube 说明](docs/youtube.md)。
 
 ## 许可
 

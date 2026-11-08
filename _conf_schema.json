@@ -573,9 +573,9 @@
         "default": 5
       },
       "cache_dir": {
-        "description": "Docker 共享缓存目录（可选）",
+        "description": "媒体缓存目录（可选）",
         "type": "string",
-        "hint": "仅 Docker 环境使用；填写容器内的共享挂载目录。非 Docker 请留空，自动使用 AstrBot 插件数据目录。",
+        "hint": "留空使用 AstrBot 插件数据目录中的 cache，适用于直接运行和容器。自定义时填写 AstrBot 进程能写入的路径；Docker 应填写容器内持久挂载路径。文件通过本地路径交给协议端时，双方必须能读取同一绝对路径。旧版容器使用过共享目录时，可显式填写原目录继续使用；升级不会自动移动缓存或 Cookie 运行时文件。",
         "default": ""
       },
       "max_video_size_mb": {
@@ -1035,9 +1035,9 @@
         "default": 60
       },
       "ytdlp_pot_provider": {
-        "description": "PO Token 提供方地址（可留空）",
+        "description": "PO Token 提供方 server 目录或 HTTP 地址（可留空）",
         "type": "string",
-        "hint": "选填。PO Token 是 YouTube 的 BotGuard 令牌，本插件不自己生成，而是复用社区现成的 yt-dlp 插件（bgutil-ytdlp-pot-provider）。装好插件后这里通常留空即可——留空时会用提供方自己的默认位置：脚本模式默认找 ~/bgutil-ytdlp-pot-provider/server，HTTP 服务模式默认 127.0.0.1:4416。只有位置不同才需要填：填 http:// 或 https:// 开头的地址走 HTTP 服务模式，填目录或脚本路径走脚本模式。注意 PO Token 能救的是「拿到了元数据但媒体流被 403/SABR 挡住」那一类；如果 YouTube 在播放器阶段就要求登录（日志里的 playabilityStatus=LOGIN_REQUIRED，多见于机房 IP），令牌帮不上忙，只能换住宅出口代理或填有效 Cookie。 Python 插件与脚本/HTTP 服务的主版本必须一致（例如 2.x 配 2.x），仅安装 Python 包不代表提供方可用。",
+        "hint": "选填，基础安装先留空。需要 PO Token 时，按仓库 docs/installation.md 在 AstrBot 所用 Python 环境运行 tools/setup_pot_provider.py，准备版本配套的 Python 提供方与脚本，再填写工具输出的 server 目录；不能填 generate_once.js 文件路径。http:// 或 https:// 开头表示使用已部署的 HTTP 服务。留空仅使用上游默认位置，不会自动下载脚本。Python 包与脚本/服务主版本必须一致，/yt_status 可检查本机脚本配置。PO Token 不能替代有效 Cookie，也不能保证解决登录验证或出口限制。",
         "default": ""
       },
       "ytdlp_fetch_pot": {
@@ -1048,7 +1048,7 @@
           "总是",
           "从不"
         ],
-        "hint": "自动：由 yt-dlp 判断这次请求需不需要令牌，推荐保持。总是：每次取流都强制生成令牌，会多花 1～3 秒拉起子进程，只在确实被 403/SABR 反复挡住时才值得开；没装提供方时本项等同于自动。从不：完全跳过令牌，用于排查提供方本身出问题的情况。",
+        "hint": "自动：由 yt-dlp 判断是否需要令牌，基础安装保持默认。总是：在配套提供方和脚本安装完成后，用于排查持续 403/SABR 或中后段受限；会增加耗时，取决于网络和生成过程。仅安装 Python 包不足以生成令牌。从不：跳过令牌，用于排查提供方故障。此选项不会安装或升级任何组件。",
         "default": "自动"
       }
     }

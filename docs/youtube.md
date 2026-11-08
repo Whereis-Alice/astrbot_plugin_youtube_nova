@@ -18,6 +18,8 @@ YouTube Nova 不依赖第三方解析站。媒体流统一由 yt-dlp 解析，�
 
 ## 运行依赖
 
+首次部署请从[安装与首次验证](installation.md)开始；其中包含各平台命令、Docker 示例、AstrBot Python 环境选择及 PO Token 配套安装工具。
+
 插件 Python 依赖已经包含：
 
 - `yt-dlp >= 2026.8.19`
@@ -25,7 +27,7 @@ YouTube Nova 不依赖第三方解析站。媒体流统一由 yt-dlp 解析，�
 
 服务器还需要：
 
-- `ffmpeg`：合并 DASH 音视频、执行可选的视频压缩策略；
+- `ffmpeg` 与 `ffprobe`：合并 DASH 音视频、检查媒体并执行可选的视频压缩策略；
 - 一个 JS 运行时：Deno 2.3+、Node.js 22+、Bun 1.2.11+ 或 QuickJS。
 
 插件会自动探测运行时并显式传给 yt-dlp。只安装 yt-dlp 而没有 `yt-dlp-ejs` 或 JS 运行时，通常无法处理当前 YouTube 的播放器挑战。
@@ -48,7 +50,7 @@ YouTube Nova 不依赖第三方解析站。媒体流统一由 yt-dlp 解析，�
 
 热评开关位于“消息输出 -> 附加内容：热评 -> YouTube”。
 
-yt-dlp 优先选择 DASH，其次是带音频的单文件流，最后才是纯视频轨。格式大小优先读取 `filesize` / `filesize_approx`，缺失时按码率和时长估算。启用压缩或文件投递时，选流预算使用管理员硬上限，以便后处理拿到质量更高的源；否则使用普通视频发送上限。所有候选都超出预算时会选择最小格式，下载后仍会按实际体积复检。
+yt-dlp 优先选择 DASH，其次是带音频的单文件流，最后才是纯视频轨。格式大小优先读取 `filesize` / `filesize_approx`，缺失时按码率和时长估算。启用压缩或文件投递时，选流预算使用管理员硬上限，以便后处理拿到质量更高的源；否则使用普通视频发送上限。所有候选都超出估算预算时会保留最小候选作后续判断，媒体预检和下载仍按实际字节数执行配置的体积上限。
 
 ## 浏览器 Profile
 
@@ -57,7 +59,7 @@ yt-dlp 优先选择 DASH，其次是带音频的单文件流，最后才是纯�
 1. 用运行 AstrBot 的同一系统用户启动 Chromium/Chrome，并登录 YouTube 小号。
 2. 在插件配置中选择“登录凭据来源 -> 浏览器 Profile”。
 3. 浏览器类型必须与实际浏览器一致。
-4. Profile 建议填写完整目录，例如 `/root/.config/chromium/Default`。
+4. Profile 建议填写当前运行用户的完整目录，例如 `/home/astrbot/.config/chromium/Default`。
 5. 有桌面时将“自动启动浏览器续活”设为“有头（推荐）”。
 6. Linux 密钥环通常保持 `auto`；Chromium 使用 `--password-store=basic` 时可选 `BASICTEXT`。
 
@@ -91,19 +93,15 @@ PO Token 用于部分 SABR / GVS 媒体请求。它是可选增强，不是登�
 | 账号需要重新登录或 Cookie 已被吊销 | 无法替代登录 |
 | 机房 IP 频繁触发机器人验证 | 可能增加可用客户端，但住宅出口通常更关键 |
 
-推荐复用 `bgutil-ytdlp-pot-provider`，插件不自行实现 BotGuard。安装 Python 插件：
+推荐复用 `bgutil-ytdlp-pot-provider`，插件不自行实现 BotGuard。按照[PO Token 部署](installation.md#可选部署-po-token)在 AstrBot 使用的 Python 环境执行仓库安装工具，可配套安装固定 2.0.2 Python 提供方与 2.0.2 官方生成脚本；只安装 Python 包不能完成部署。工具不会自动改写插件配置，需将它输出的路径填入面板。
 
-```bash
-pip install -U bgutil-ytdlp-pot-provider
-```
-
-provider 的生成脚本或 HTTP 服务按其上游文档部署。脚本模式通常不常驻进程，适合小服务器；HTTP 模式默认监听 `127.0.0.1:4416`，延迟更低但会常驻。
+手动部署可使用[上游文档](https://github.com/Brainicism/bgutil-ytdlp-pot-provider#readme)中的生成脚本或 HTTP 服务，但必须核对两端主版本。脚本模式通常不常驻进程，适合小服务器；HTTP 模式默认监听 `127.0.0.1:4416`，延迟更低但会常驻。HTTP 地址必须从 AstrBot 的容器或服务环境内可达。
 
 - `youtube.ytdlp_pot_provider` 留空时使用 provider 默认位置；
 - 填 `http://` 或 `https://` 地址时使用 HTTP 模式；
-- 填目录或脚本路径时使用脚本模式；
+- 填编译后的 `server` 目录时使用脚本模式，不填 `generate_once.js` 文件路径；
 - “自动”让 yt-dlp 按需取令牌；
-- “总是”每次都生成，通常额外增加 1 到 3 秒；
+- “总是”每次都生成，会增加取流等待，耗时取决于服务器和网络；
 - “从不”用于排查 provider 自身故障。
 
 日志中的“无 POT 提供方”不是错误。当前视频不需要令牌时，匿名或登录态良好的 yt-dlp 仍可正常取流。
@@ -156,4 +154,4 @@ LLOneBot/QQ Highway 的实际边界可能随账号、客户端和线路变化。
 2. 使用匹配组件后，将 `youtube.ytdlp_fetch_pot` 设为“总是”重试。只安装插件、仍指向旧脚本不能解决问题。
 3. 保持解析和下载使用同一插件代理配置。未配置代理时，两端均显式直连。
 
-插件不会自动升级第三方 PO Token 组件。签名 URL、令牌、Cookie 与带凭据的代理地址不要贴到日志或 Issue。
+插件不会自动升级第三方 PO Token 组件；新服务器需要按安装文档显式部署，作者服务器上的脚本和配置不会随插件复制。签名 URL、令牌、Cookie 与带凭据的代理地址不要贴到日志或 Issue。

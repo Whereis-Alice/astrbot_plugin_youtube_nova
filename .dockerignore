@@ -1,0 +1,11 @@
+.git
+.venv
+venv
+data
+cache
+**/__pycache__
+**/node_modules
+**/pot_provider_*
+.pytest_cache
+*.log
+*.zip

@@ -165,11 +165,6 @@ LEGACY_CARD_LAYOUT_VALUES: Dict[str, str] = {
 }
 
 
-def _is_docker_environment() -> bool:
-    """判断当前是否运行在 Docker 容器内。"""
-    return os.path.exists("/.dockerenv")
-
-
 def _get_astrbot_plugin_cache_dir() -> str:
     """获取默认媒体缓存目录；非 AstrBot 运行时回退到项目 cache 目录。"""
     try:
@@ -1009,10 +1004,10 @@ class ConfigManager:
         )
 
         configured_cache_dir = str(download_raw.get("cache_dir", "") or "").strip()
-        if _is_docker_environment():
-            cache_dir = configured_cache_dir or Config.DEFAULT_CACHE_DIR
-        else:
-            cache_dir = _get_astrbot_plugin_cache_dir()
+        cache_dir = (
+            os.path.abspath(os.path.expanduser(configured_cache_dir))
+            if configured_cache_dir else _get_astrbot_plugin_cache_dir()
+        )
 
         max_concurrent = min(
             self._parse_positive_int(

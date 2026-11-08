@@ -1,4 +1,5 @@
 import asyncio
+import json
 import threading
 from types import SimpleNamespace
 
@@ -138,3 +139,48 @@ def test_manual_cookie_is_only_reported_as_configured(monkeypatch):
     report = asyncio.run(diagnostics.build_diagnostic_report(make_config(cookie="SID=SECRET")))
     assert "手动 Cookie（已配置，未验证登录态）" in report
     assert "SECRET" not in report
+
+
+def test_pot_major_mismatch_is_reported_without_exposing_directory(monkeypatch, tmp_path):
+    patch_ready(monkeypatch)
+    monkeypatch.setattr(diagnostics.importlib.metadata, "version", lambda name: "2.0.2")
+    server = tmp_path / "SECRET_SERVER"
+    (server / "build").mkdir(parents=True)
+    (server / "package.json").write_text(json.dumps({"version": "1.3.2"}), encoding="utf-8")
+    (server / "build" / "generate_once.js").write_text("", encoding="utf-8")
+    report = asyncio.run(diagnostics.build_diagnostic_report(make_config(ytdlp_pot_provider=str(server))))
+    assert "bgutil Python 包：2.0.2" in report
+    assert "PO Token 脚本版本：1.3.2" in report
+    assert "PO Token 主版本：不匹配" in report
+    assert "仅升级 Python 包不能修复" in report
+    assert "SECRET" not in report and str(tmp_path) not in report
+
+
+def test_pot_matching_versions_still_distinguish_missing_build(monkeypatch, tmp_path):
+    monkeypatch.setattr(diagnostics.importlib.metadata, "version", lambda name: "2.0.2")
+    (tmp_path / "package.json").write_text('{"version":"2.0.2"}', encoding="utf-8")
+    lines, advice = diagnostics._pot_configuration_details(str(tmp_path))
+    assert "PO Token 编译产物：缺失" in lines
+    assert "PO Token 主版本：匹配（未验证令牌生成）" in lines
+    assert any("编译" in item for item in advice)
+
+
+def test_pot_missing_package_and_invalid_metadata_have_install_advice(monkeypatch, tmp_path):
+    def missing(name):
+        raise diagnostics.importlib.metadata.PackageNotFoundError(name)
+    monkeypatch.setattr(diagnostics.importlib.metadata, "version", missing)
+    (tmp_path / "package.json").write_text("invalid", encoding="utf-8")
+    lines, advice = diagnostics._pot_configuration_details(str(tmp_path))
+    assert "bgutil Python 包：未安装" in lines
+    assert "PO Token 脚本：元数据无法读取" in lines
+    assert any("setup_pot_provider.py" in item for item in advice)
+
+
+def test_pot_http_mode_never_reads_files_or_returns_url(monkeypatch):
+    monkeypatch.setattr(diagnostics.importlib.metadata, "version", lambda name: "2.0.2")
+    def unexpected(*args):
+        raise AssertionError("HTTP mode must not inspect local files")
+    monkeypatch.setattr(diagnostics, "Path", unexpected)
+    lines, advice = diagnostics._pot_configuration_details("https://user:SECRET@example.test/private?token=SECRET")
+    assert "PO Token 配置：HTTP 服务（未连接验证）" in lines
+    assert "SECRET" not in " ".join(lines + advice)

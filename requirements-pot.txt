@@ -1,0 +1,3 @@
+# Optional PO Token provider; install in AstrBot's own Python environment.
+# This pin matches tools/setup_pot_provider.py and the 2.0.2 upstream script.
+bgutil-ytdlp-pot-provider==2.0.2

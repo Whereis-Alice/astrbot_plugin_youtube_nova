@@ -1,0 +1,9 @@
+# Optional overlay: docker compose -f examples/docker/compose.yaml -f examples/docker/compose.pot.yaml up -d
+# Install requirements-pot.txt in AstrBot's Python separately, then configure
+# youtube.ytdlp_pot_provider = http://pot-provider:4416
+services:
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.2
+    init: true
+    restart: unless-stopped
+    # No host port: reachable only on this Compose project's shared network.

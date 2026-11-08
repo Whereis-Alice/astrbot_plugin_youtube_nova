@@ -1,0 +1,27 @@
+name: 故障反馈
+description: 安装、取流、卡片或文件投递问题
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先阅读 [新服务器安装指南](https://github.com/Whereis-Alice/astrbot_plugin_youtube_nova/blob/main/docs/installation.md)。不要提交 Cookie、管理 API 密钥、代理密码、完整签名媒体 URL 或未经脱敏的配置文件。
+  - type: textarea
+    id: environment
+    attributes:
+      label: 运行环境与依赖检查
+      description: 插件/AstrBot 版本、系统、Docker 或直接运行，以及管理员 /yt_status 的输出。可选 PO Token 安装工具支持 --check 离线检查。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: 复现步骤与预期结果
+      description: 提供可公开访问的视频链接、触发方式、实际结果；涉及文件发送时注明协议端及版本。
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 脱敏日志
+      description: 粘贴从解析开始到失败的相关日志，保留 HTTP 状态码和异常类型。先删除 Cookie、密钥、令牌、代理凭据及签名 URL。
+      render: text

@@ -23,3 +23,20 @@ jobs:
         run: python -m pip install -r requirements.txt "astrbot>=4.25,<5" "pytest>=8,<10"
       - name: Run regression tests
         run: python -m pytest -q
+
+  provider-install:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install matched optional components in a fresh data directory
+        run: python tools/setup_pot_provider.py --data-dir "${{ runner.temp }}/youtube-nova-pot"
+      - name: Check installed components without network requests
+        run: python tools/setup_pot_provider.py --data-dir "${{ runner.temp }}/youtube-nova-pot" --check
+      - name: Verify repeat installation reuses the managed directory
+        run: python tools/setup_pot_provider.py --data-dir "${{ runner.temp }}/youtube-nova-pot"
