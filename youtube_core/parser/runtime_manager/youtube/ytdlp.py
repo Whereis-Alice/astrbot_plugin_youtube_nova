@@ -75,7 +75,7 @@ _POT_URL_RE = re.compile(r"^https?://", re.I)
 _FETCH_POT_CHOICES: Tuple[str, ...] = ("auto", "always", "never")
 _POT_PLUGIN_HINT = (
     "按仓库 docs/installation.md 在 AstrBot 环境运行 "
-    "tools/setup_pot_provider.py 安装版本配套的组件"
+    "tools/setup_pot_provider.py 安装版本配套的 bgutil-ytdlp-pot-provider 组件"
 )
 # provider 插件模块名的常见前缀，剥掉后更适合放进日志摘要。
 _POT_NAME_PREFIXES: Tuple[str, ...] = ("getpot_", "get_pot_", "pot_")
