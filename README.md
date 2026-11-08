@@ -14,6 +14,8 @@
 - 作者头像、播放量、点赞数、评论数和公开热评
 - YouTube 仿站皮肤与五套通用皮肤，支持深浅色和四种布局
 - 文本、卡片、富媒体、翻译、聚合、归档和频率限制
+- 管理员 `/yt_status`（或 `/油管状态`）本机诊断依赖、缓存和配置状态
+- 单条消息默认最多解析 3 个唯一链接，可在触发设置中调整为 1–20
 
 ## 安装
 
@@ -34,6 +36,8 @@ https://github.com/Whereis-Alice/astrbot_plugin_youtube_nova
 - 代理解析与媒体下载必须走同一出口，否则 googlevideo 直链可能返回 403。
 - PO Token 是可选增强，不能替代有效登录态，也不能改善机房 IP 的信誉。
 - Cookie、代理和浏览器 Profile 都是本机凭据，不要提交到仓库、Issue 或日志。
+
+诊断命令仅 AstrBot 管理员可用；只检查本机依赖与配置，不验证 Cookie 是否有效。
 
 完整配置见 [配置说明](docs/configuration.md)，取流、Cookie 与排障见 [YouTube 说明](docs/youtube.md)。
 

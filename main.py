@@ -1,18 +1,20 @@
 import asyncio
 import copy
+from collections.abc import AsyncIterator
 from typing import Any, Dict, Optional
 
 import aiohttp
+from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.message_components import Reply
-from astrbot.api.star import Context, Star, register
-from astrbot.core.star.filter.event_message_type import EventMessageType
+from astrbot.api.star import Context, Star
 
 from .youtube_core.config_manager import (
     TRANSLATION_APPLY_CARD_AND_TEXT,
     ConfigManager,
 )
 from .youtube_core.constants import Config
+from .youtube_core.diagnostics import build_diagnostic_report
 from .youtube_core.downloader import DownloadManager, create_public_only_connector
 from .youtube_core.interaction.platform.youtube import YouTubeCookieNoticeManager
 from .youtube_core.logger import logger
@@ -40,19 +42,13 @@ from .youtube_core.storage import (
 from .youtube_core.translation import MetadataTranslator, build_card_metadata_list
 
 
-@register(
-    "astrbot_plugin_youtube_nova",
-    "Whereis-Alice",
-    "YouTube Nova - YouTube 视频、卡片、翻译与热评解析",
-    "1.4.0",
-)
 class YouTubeNovaPlugin(Star):
     # Google 侧的登录凭据大约每 10 分钟就会换一茬。轮换请求本身极轻（一个
     # 空 POST），跑得比 Cookie 老化更快才追得上；重的登录态体检仍按配置的
     # 体检间隔来，两者共用同一个后台任务。
     _YOUTUBE_ROTATE_INTERVAL = 20 * 60
 
-    def __init__(self, context: Context, config: dict):
+    def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
         self.logger = logger
 
@@ -129,12 +125,12 @@ class YouTubeNovaPlugin(Star):
             ),
         )
 
-    async def initialize(self):
+    async def initialize(self) -> None:
         """事件循环就绪后再启动后台任务（__init__ 阶段无运行中的事件循环）。"""
         self._start_expired_cache_cleanup()
         self._start_youtube_cookie_keepalive()
 
-    async def terminate(self):
+    async def terminate(self) -> None:
         await self._shutdown_expired_cache_cleanup()
         await self._shutdown_youtube_cookie_keepalive()
         if self.youtube_parser is not None:
@@ -976,10 +972,19 @@ class YouTubeNovaPlugin(Star):
             f"{files_cleaned} 个文件, {failed_subdirs} 个失败"
         )
 
+    @filter.command("yt_status", alias={"油管状态"})
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    async def youtube_status(self, event: AstrMessageEvent) -> AsyncIterator[Any]:
+        """检查 YouTube 依赖与配置状态，不发起取流或登录请求。"""
+        report = await build_diagnostic_report(
+            self.config_manager, active_media_flows=self._active_media_flows
+        )
+        yield event.plain_result(report)
+
     # ── 主事件处理 ──────────────────────────────────────
 
-    @filter.event_message_type(EventMessageType.ALL)
-    async def auto_parse(self, event: AstrMessageEvent):
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def auto_parse(self, event: AstrMessageEvent) -> None:
         self._start_expired_cache_cleanup()
         self._start_youtube_cookie_keepalive()
         cfg = self.config_manager
@@ -1066,6 +1071,15 @@ class YouTubeNovaPlugin(Star):
 
         if not zip_requested and not cfg.trigger.should_parse(original_message_text):
             return
+
+        link_limit = cfg.trigger.max_links_per_message
+        if len(links_with_parser) > link_limit:
+            await event.send(
+                event.plain_result(
+                    f"单条消息最多解析 {link_limit} 个链接，本次只处理前 {link_limit} 个。"
+                )
+            )
+            links_with_parser = links_with_parser[:link_limit]
 
         rate_limit_user_key = ParseRecordManager.build_user_key(
             event.get_platform_name(),

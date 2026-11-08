@@ -3,6 +3,8 @@ import time
 from http.cookiejar import Cookie
 from unittest import mock
 
+import pytest
+
 from youtube_core.config_manager import ConfigManager
 from youtube_core.parser.platform.youtube import YouTubeParser
 from youtube_core.parser.runtime_manager.youtube import (
@@ -124,6 +126,66 @@ def test_browser_source_throttles_repeated_profile_reads() -> None:
     assert second[1] is False
     assert first[0] is second[0]
     extract.assert_called_once()
+
+
+def test_browser_source_throttles_failed_profile_reads_and_retries() -> None:
+    source = BrowserCookieSource(BrowserCookieSpec(), refresh_seconds=60)
+
+    async def run():
+        with mock.patch.object(
+            browser_runtime, "_extract_snapshot", side_effect=OSError("profile missing")
+        ) as extract:
+            # 同一时刻的多个消息只触发一次真实读取；缓存失败不增加失败次数。
+            results = await asyncio.gather(
+                *(source.refresh() for _ in range(3)), return_exceptions=True
+            )
+            assert all(isinstance(result, browser_runtime.BrowserCookieError) for result in results)
+            assert extract.call_count == 1
+            assert source.failure_streak == 1
+            source._last_attempt -= source.refresh_seconds + 1
+            with pytest.raises(browser_runtime.BrowserCookieError, match="profile missing"):
+                await source.refresh()
+            assert extract.call_count == 2
+            assert source.failure_streak == 2
+
+    asyncio.run(run())
+
+
+def test_forced_browser_refresh_bypasses_cached_failure() -> None:
+    source = BrowserCookieSource(BrowserCookieSpec(), refresh_seconds=60)
+    snapshot = _snapshot()
+
+    async def run():
+        with mock.patch.object(
+            browser_runtime, "_extract_snapshot", side_effect=[OSError("profile missing"), snapshot]
+        ) as extract:
+            with pytest.raises(browser_runtime.BrowserCookieError):
+                await source.refresh()
+            actual, fresh = await source.refresh(force=True)
+            assert actual is snapshot and fresh
+            assert source.failure_streak == 0
+            assert source.last_error == ""
+            assert extract.call_count == 2
+
+    asyncio.run(run())
+
+
+def test_failed_browser_refresh_does_not_replay_stale_success_snapshot() -> None:
+    source = BrowserCookieSource(BrowserCookieSpec(), refresh_seconds=60)
+
+    async def run():
+        with mock.patch.object(
+            browser_runtime, "_extract_snapshot", side_effect=[_snapshot(), OSError("profile removed")]
+        ) as extract:
+            await source.refresh()
+            source._last_attempt -= source.refresh_seconds + 1
+            for force in (True, False):
+                with pytest.raises(browser_runtime.BrowserCookieError, match="profile removed"):
+                    await source.refresh(force=force)
+            assert extract.call_count == 2
+            assert source.failure_streak == 1
+
+    asyncio.run(run())
 
 
 def test_same_browser_snapshot_does_not_overwrite_response_rotation() -> None:
@@ -287,3 +349,13 @@ def test_browser_maintenance_wakes_syncs_and_verifies() -> None:
     wakeup.assert_awaited_once()
     refresh.assert_awaited_once_with(force=True)
     keepalive.assert_awaited_once()
+
+
+def test_snapshot_recognizes_each_supported_auth_cookie():
+    from youtube_core.parser.runtime_manager.youtube.browser_cookie import BrowserCookieSnapshot
+    from youtube_core.parser.runtime_manager.youtube.cookie import SAPISID_COOKIE_NAMES
+
+    for name in SAPISID_COOKIE_NAMES:
+        snapshot = BrowserCookieSnapshot(header=f"{name}=test", cookie_count=1, names=(name,), fingerprint="test", fetched_at=0)
+        assert snapshot.authenticated
+    assert not BrowserCookieSnapshot(header="PREF=test", cookie_count=1, names=("PREF",), fingerprint="test", fetched_at=0).authenticated

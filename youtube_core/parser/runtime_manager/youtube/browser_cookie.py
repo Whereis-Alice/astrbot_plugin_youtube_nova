@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from ....logger import logger
+from .cookie import SAPISID_COOKIE_NAMES
 
 SUPPORTED_BROWSERS: tuple[str, ...] = (
     "brave",
@@ -115,7 +116,7 @@ class BrowserCookieSnapshot:
 
     @property
     def authenticated(self) -> bool:
-        return bool({"SAPISID", "__Secure-3PAPISID"}.intersection(self.names))
+        return bool(set(SAPISID_COOKIE_NAMES).intersection(self.names))
 
 
 class _ExtractionLogger:
@@ -398,21 +399,17 @@ class BrowserCookieSource:
         force: bool = False,
     ) -> tuple[BrowserCookieSnapshot, bool]:
         """Return ``(snapshot, freshly_read)`` without exposing any value in logs."""
-        now = time.monotonic()
-        if (
-            not force
-            and self._snapshot is not None
-            and now - self._last_attempt < self.refresh_seconds
-        ):
-            return self._snapshot, False
-
         async with self._lock:
             now = time.monotonic()
             if (
                 not force
-                and self._snapshot is not None
+                and (self._snapshot is not None or self._last_error)
                 and now - self._last_attempt < self.refresh_seconds
             ):
+                if self._last_error:
+                    # 失败也遵守读取间隔，避免无效 Profile 让每条消息都重复读盘。
+                    # 不把缓存失败计为新的失败次数，也不回放过期的成功快照。
+                    raise BrowserCookieError(self._last_error)
                 return self._snapshot, False
             self._last_attempt = now
             try:

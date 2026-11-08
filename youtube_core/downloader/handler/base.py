@@ -234,8 +234,6 @@ async def range_download_file(
     except DownloadLimitExceeded as e:
         logger.warning(f"Range下载已拒绝: {format_url_for_log(url)}, 错误: {e}")
         return None
-    budget_reserved = file_size
-
     num_chunks = (file_size + chunk_size - 1) // chunk_size
     logger.debug(
         f"开始Range下载: {format_url_for_log(url)}, "
@@ -243,14 +241,6 @@ async def range_download_file(
     )
 
     temp_path = _temporary_path(output_path)
-    try:
-        await run_blocking(_prepare_range_file, temp_path, file_size)
-    except Exception as e:
-        logger.warning(f"创建Range目标文件失败: {output_path}, 错误: {e}")
-        cleanup_file(temp_path)
-        await active_budget.release(budget_reserved)
-        return None
-
     semaphore = asyncio.Semaphore(max_concurrent)
 
     async def download_chunk(chunk_idx: int) -> Tuple[int, bool]:
@@ -288,94 +278,93 @@ async def range_download_file(
                 )
                 return chunk_idx, False
 
-    tasks = [asyncio.create_task(download_chunk(i)) for i in range(num_chunks)]
+    tasks = []
+    completed = False
+    committed = False
+
+    def commit_file() -> None:
+        nonlocal committed
+        _replace_file(temp_path, output_path)
+        # run_blocking 收到取消时仍会等线程结束。在线程中记录提交，才能在
+        # 取消发生于 os.replace 期间时回收本次产物，并保留尚未覆盖的旧文件。
+        committed = True
+
     try:
+        try:
+            await run_blocking(_prepare_range_file, temp_path, file_size)
+        except Exception as e:
+            logger.warning(f"创建Range目标文件失败: {output_path}, 错误: {e}")
+            return None
+
+        tasks = [asyncio.create_task(download_chunk(i)) for i in range(num_chunks)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-    except asyncio.CancelledError:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        cleanup_file(temp_path)
-        await active_budget.release(budget_reserved)
-        raise
+        failed_chunks: List[Optional[int]] = []
+        for result in results:
+            if isinstance(result, BaseException) and not isinstance(result, Exception):
+                # 取消及其它中断信号必须向上传播，不能当成普通失败吞掉。
+                raise result
+            if isinstance(result, Exception):
+                logger.warning(f"Chunk下载异常: {result}")
+                failed_chunks.append(None)
+            elif isinstance(result, tuple) and len(result) == 2:
+                chunk_idx, success = result
+                if not success:
+                    failed_chunks.append(chunk_idx)
+            else:
+                failed_chunks.append(None)
+
+        if failed_chunks:
+            logger.warning(
+                f"部分chunks下载失败 ({len(failed_chunks)}/{num_chunks})，"
+                f"放弃Range结果: {format_url_for_log(url)}"
+            )
+            return None
+
+        try:
+            actual_size = await run_blocking(os.path.getsize, temp_path)
+        except Exception as e:
+            logger.warning(f"读取Range下载文件大小失败: {output_path}, 错误: {e}")
+            return None
+
+        if actual_size != file_size:
+            logger.warning(
+                "Range下载文件大小异常: "
+                f"{format_url_for_log(url)}, expected={file_size}, actual={actual_size}"
+            )
+            return None
+
+        try:
+            await run_blocking(commit_file)
+        except Exception as e:
+            logger.warning(f"提交Range下载文件失败: {output_path}, 错误: {e}")
+            return None
+
+        size_mb = actual_size / (1024 * 1024)
+        logger.debug(
+            "Range下载完成: "
+            f"{format_url_for_log(url)}, file={output_path}, size={size_mb:.2f}MB"
+        )
+        completed = True
+        return {
+            "file_path": os.path.normpath(output_path),
+            "size_mb": size_mb,
+            "status_code": 206,
+        }
     except Exception as e:
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
         logger.warning(
             f"Range下载写入流程失败: {format_url_for_log(url)}, 错误: {e}"
         )
-        cleanup_file(temp_path)
-        await active_budget.release(budget_reserved)
         return None
-
-    failed_chunks: List[Optional[int]] = []
-    for result in results:
-        if isinstance(result, BaseException) and not isinstance(result, Exception):
-            # CancelledError 等非 Exception 异常必须向上传播，不能当成普通失败吞掉
+    finally:
+        if not completed:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             cleanup_file(temp_path)
-            await active_budget.release(budget_reserved)
-            raise result
-        if isinstance(result, Exception):
-            logger.warning(f"Chunk下载异常: {result}")
-            failed_chunks.append(None)
-        elif isinstance(result, tuple) and len(result) == 2:
-            chunk_idx, success = result
-            if not success:
-                failed_chunks.append(chunk_idx)
-        else:
-            failed_chunks.append(None)
-
-    if failed_chunks:
-        logger.warning(
-            f"部分chunks下载失败 ({len(failed_chunks)}/{num_chunks})，"
-            f"放弃Range结果: {format_url_for_log(url)}"
-        )
-        cleanup_file(temp_path)
-        await active_budget.release(budget_reserved)
-        return None
-
-    try:
-        actual_size = await run_blocking(os.path.getsize, temp_path)
-    except Exception as e:
-        logger.warning(f"读取Range下载文件大小失败: {output_path}, 错误: {e}")
-        cleanup_file(temp_path)
-        await active_budget.release(budget_reserved)
-        return None
-
-    if actual_size != file_size:
-        logger.warning(
-            "Range下载文件大小异常: "
-            f"{format_url_for_log(url)}, expected={file_size}, actual={actual_size}"
-        )
-        cleanup_file(temp_path)
-        await active_budget.release(budget_reserved)
-        return None
-
-    try:
-        await run_blocking(_replace_file, temp_path, output_path)
-    except asyncio.CancelledError:
-        cleanup_file(temp_path)
-        await active_budget.release(budget_reserved)
-        raise
-    except Exception as e:
-        logger.warning(f"提交Range下载文件失败: {output_path}, 错误: {e}")
-        cleanup_file(temp_path)
-        await active_budget.release(budget_reserved)
-        return None
-
-    size_mb = actual_size / (1024 * 1024)
-    logger.debug(
-        "Range下载完成: "
-        f"{format_url_for_log(url)}, file={output_path}, size={size_mb:.2f}MB"
-    )
-    return {
-        "file_path": os.path.normpath(output_path),
-        "size_mb": size_mb,
-        "status_code": 206,
-    }
+            if committed:
+                cleanup_file(output_path)
+            await active_budget.release(file_size)
 
 
 async def download_media_stream(

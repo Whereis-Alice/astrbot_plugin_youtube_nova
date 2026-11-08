@@ -208,6 +208,7 @@ def _get_astrbot_plugin_cache_dir() -> str:
 @dataclass
 class TriggerConfig:
     auto_parse: bool = True
+    max_links_per_message: int = 3
     keywords: List[str] = field(
         default_factory=lambda: ["视频解析", "解析视频", "媒体解析"]
     )
@@ -615,6 +616,9 @@ class ConfigManager:
                 "reply_trigger": False,
             }
         self.trigger = TriggerConfig(
+            max_links_per_message=self._parse_bounded_int(
+                trigger_raw.get("max_links_per_message", 3), 3, 1, 20
+            ),
             auto_parse=self._parse_bool(
                 trigger_raw.get("auto_parse", True),
                 True,

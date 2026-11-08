@@ -44,6 +44,17 @@
           "解析视频",
           "媒体解析"
         ]
+      },
+      "max_links_per_message": {
+        "description": "单条消息最多解析链接数",
+        "type": "int",
+        "hint": "按提取顺序处理前 N 个唯一链接，超出部分提示跳过；引用解析和归档同样生效。范围 1–20，默认 3。",
+        "default": 3,
+        "slider": {
+          "min": 1,
+          "max": 20,
+          "step": 1
+        }
       }
     }
   },
@@ -604,7 +615,11 @@
       "group_file_source_mode": {
         "description": "文件上传来源",
         "type": "string",
-        "options": ["auto", "local", "http"],
+        "options": [
+          "auto",
+          "local",
+          "http"
+        ],
         "hint": "auto：配置 AstrBot callback_api_base 时提供短期 HTTP 下载地址，否则使用共享本地路径。local：AstrBot 与协议端必须看到同一绝对文件路径。http：必须配置协议端可访问的 callback_api_base，适合不同容器或主机；配置缺失时明确提示，不降级为本地路径。",
         "default": "auto"
       },
